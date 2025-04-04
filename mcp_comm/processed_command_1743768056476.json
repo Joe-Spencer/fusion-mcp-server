@@ -1,0 +1,14 @@
+{
+  "command": "call_tool",
+  "params": {
+    "tool_name": "create_parameter",
+    "params": {
+      "name": "TestParam_8056",
+      "expression": "10 mm",
+      "unit": "mm",
+      "comment": "Created by MCP client test"
+    }
+  },
+  "timestamp": 1743768056.4765744,
+  "id": 1743768056476
+}

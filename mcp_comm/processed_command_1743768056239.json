@@ -1,0 +1,11 @@
+{
+  "command": "call_tool",
+  "params": {
+    "tool_name": "message_box",
+    "params": {
+      "message": "Test message from MCP client at Fri Apr  4 08:00:56 2025"
+    }
+  },
+  "timestamp": 1743768056.2392442,
+  "id": 1743768056239
+}

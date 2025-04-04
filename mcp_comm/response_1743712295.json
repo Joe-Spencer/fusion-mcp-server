@@ -1,0 +1,8 @@
+{
+  "id": 1743712295,
+  "success": true,
+  "prompts": [
+    "create_sketch_prompt",
+    "parameter_setup_prompt"
+  ]
+}

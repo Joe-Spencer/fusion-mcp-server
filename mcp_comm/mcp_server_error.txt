@@ -1,20 +1,7 @@
-MCP Server Error: 1 validation error for function-wrap[wrap_val()]
-  Input should be a valid URL, relative URL without a base [type=url_parsing, input_value='active-document-info', input_type=str]
-    For further information visit https://errors.pydantic.dev/2.11/v/url_parsing
+MCP Server Error: module 'mcp' has no attribute '__version__'
 
 Traceback (most recent call last):
-  File "C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\commands\MCPServerCommand.py", line 48, in run_mcp_server
-    @fusion_mcp.resource("active-document-info")
-     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Joseph\AppData\Local\Autodesk\webdeploy\production\b4ebb90d69b5fc8cf013f75341ee2a1192c9da8e\Python\lib\site-packages\mcp\server\fastmcp\server.py", line 389, in decorator
-    uri=AnyUrl(uri),
-        ^^^^^^^^^^^
-  File "C:\Users\Joseph\AppData\Local\Autodesk\webdeploy\production\b4ebb90d69b5fc8cf013f75341ee2a1192c9da8e\Python\lib\site-packages\pydantic\networks.py", line 128, in __init__
-    self._url = _build_type_adapter(self.__class__).validate_python(url)._url
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Joseph\AppData\Local\Autodesk\webdeploy\production\b4ebb90d69b5fc8cf013f75341ee2a1192c9da8e\Python\lib\site-packages\pydantic\type_adapter.py", line 421, in validate_python
-    return self.validator.validate_python(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-pydantic_core._pydantic_core.ValidationError: 1 validation error for function-wrap[wrap_val()]
-  Input should be a valid URL, relative URL without a base [type=url_parsing, input_value='active-document-info', input_type=str]
-    For further information visit https://errors.pydantic.dev/2.11/v/url_parsing
+  File "C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\commands\MCPServerCommand.py", line 72, in run_mcp_server
+    "path": doc.dataFile.name if doc.dataFile else "Unsaved",
+                    ^^^^^^^^^^^^^^^
+AttributeError: module 'mcp' has no attribute '__version__'

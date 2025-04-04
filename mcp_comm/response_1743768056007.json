@@ -1,0 +1,22 @@
+{
+  "id": 1743768056007,
+  "success": true,
+  "data": {
+    "parameters": [
+      {
+        "name": "Width",
+        "value": 10.0,
+        "expression": "10 mm",
+        "unit": "mm",
+        "comment": "Width parameter"
+      },
+      {
+        "name": "Height",
+        "value": 20.0,
+        "expression": "20 mm",
+        "unit": "mm",
+        "comment": "Height parameter"
+      }
+    ]
+  }
+}

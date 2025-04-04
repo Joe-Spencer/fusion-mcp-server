@@ -1,0 +1,8 @@
+{
+  "command": "get_resource",
+  "params": {
+    "resource_name": "fusion://design-structure"
+  },
+  "timestamp": 1743768055.8897107,
+  "id": 1743768055889
+}

@@ -1,0 +1,9 @@
+{
+  "id": 1743768056122,
+  "success": true,
+  "tools": [
+    "message_box",
+    "create_new_sketch",
+    "create_parameter"
+  ]
+}

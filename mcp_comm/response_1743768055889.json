@@ -1,0 +1,19 @@
+{
+  "id": 1743768055889,
+  "success": true,
+  "data": {
+    "design_name": "Test Design",
+    "root_component": {
+      "name": "Root Component",
+      "bodies": [
+        "Body 1",
+        "Body 2"
+      ],
+      "sketches": [
+        "Sketch 1",
+        "Sketch 2"
+      ],
+      "occurrences": []
+    }
+  }
+}

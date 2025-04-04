@@ -1,0 +1,3 @@
+MCP Server started successfully at Fri Apr  4 11:12:24 2025
+Server URL: http://127.0.0.1:3000/sse
+Communication directory: C:/Users/Joseph/Documents/code/fusion-mcp-server\mcp_comm

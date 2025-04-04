@@ -1,0 +1,8 @@
+{
+  "command": "get_prompt",
+  "params": {
+    "prompt_name": "create_sketch_prompt"
+  },
+  "timestamp": 1743768056.709399,
+  "id": 1743768056709
+}

@@ -1,0 +1,1 @@
+DISPLAY_MESSAGE: Test message from MCP client at Fri Apr  4 08:00:56 2025

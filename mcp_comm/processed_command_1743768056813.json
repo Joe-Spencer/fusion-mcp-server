@@ -1,0 +1,8 @@
+{
+  "command": "get_prompt",
+  "params": {
+    "prompt_name": "parameter_setup_prompt"
+  },
+  "timestamp": 1743768056.8139038,
+  "id": 1743768056813
+}

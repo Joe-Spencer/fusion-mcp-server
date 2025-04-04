@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import adsk.core
 import adsk.fusion
 import os
@@ -6,11 +8,8 @@ import traceback
 import threading
 import time
 import json
-import importlib.util
-import site
-from pathlib import Path
 import asyncio
-import tempfile
+from pathlib import Path
 
 from ..lib import fusionAddInUtils as futil
 
@@ -20,19 +19,32 @@ ui = app.userInterface
 server_thread = None
 server_running = False
 
-# Global storage for resources, tools, and prompts
-resources = {}
-tools = {}
-prompts = {}
+# Initialize the global handlers list
+handlers = []
 
-# Check if MCP package is installed
+# Function to check if MCP package is installed
 def check_mcp_installed():
+    missing_packages = []
+    
     try:
         import mcp
         print(f"Found MCP package at: {mcp.__file__}")
-        return True
-    except ImportError:
+    except ImportError as e:
+        print(f"Error importing MCP package: {str(e)}")
+        missing_packages.append("mcp[cli]")
+    
+    try:
+        import uvicorn
+        print(f"Found uvicorn package at: {uvicorn.__file__}")
+    except ImportError as e:
+        print(f"Error importing uvicorn package: {str(e)}")
+        missing_packages.append("uvicorn")
+    
+    if missing_packages:
+        print(f"Missing required packages: {', '.join(missing_packages)}")
         return False
+    
+    return True
 
 # Function to run MCP server
 def run_mcp_server():
@@ -40,12 +52,42 @@ def run_mcp_server():
         # Import required MCP modules
         import mcp
         from mcp.server.fastmcp import FastMCP
+        import uvicorn
+        import threading
         
+        # Create workspace path and diagnostic log
+        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+        workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+        os.makedirs(workspace_comm_dir, exist_ok=True)
+        
+        # Write diagnostic info without relying on __version__
+        diagnostic_log = os.path.join(workspace_comm_dir, "mcp_server_diagnostics.log")
+        with open(diagnostic_log, "w") as f:
+            f.write(f"MCP Server Diagnostics - {time.ctime()}\n\n")
+            f.write(f"Server URL: http://127.0.0.1:3000/sse\n")
+            f.write(f"Workspace directory: {workspace_path}\n")
+            f.write(f"Communication directory: {workspace_comm_dir}\n\n")
+            f.write(f"Python version: {sys.version}\n\n")
+            f.write(f"Registered Resources:\n  (Method available_resources() not available in this MCP SDK version)\n\n")
+            f.write(f"Registered Tools:\n  (Method available_tools() not available in this MCP SDK version)\n\n")
+            f.write(f"Registered Prompts:\n  (Method available_prompts() not available in this MCP SDK version)\n\n")
+            f.write(f"Environment:\n  Python version: {sys.version}\n  MCP SDK available: True\n\n")
+        
+        print("Creating FastMCP server instance...")
         # Create the MCP server
         fusion_mcp = FastMCP("Fusion 360 MCP Server")
         
-        # Define resources
-        @fusion_mcp.resource("active-document-info")
+        # Write more diagnostics about the FastMCP object
+        with open(diagnostic_log, "a") as f:
+            f.write(f"FastMCP Object Attributes:\n")
+            for attr in dir(fusion_mcp):
+                if not attr.startswith('_'):
+                    f.write(f"  - {attr}\n")
+            f.write("\n")
+        
+        print("Registering resources...")
+        # Define resources - Note: All resource URIs must have a scheme
+        @fusion_mcp.resource("fusion://active-document-info")
         def get_active_document_info():
             """Get information about the active document in Fusion 360."""
             try:
@@ -54,14 +96,14 @@ def run_mcp_server():
                     return {
                         "name": doc.name,
                         "path": doc.dataFile.name if doc.dataFile else "Unsaved",
-                        "type": doc.documentType
+                        "type": str(doc.documentType)
                     }
                 else:
                     return {"error": "No active document"}
-            except:
-                return {"error": traceback.format_exc()}
+            except Exception as e:
+                return {"error": str(e) + "\n" + traceback.format_exc()}
         
-        @fusion_mcp.resource("design-structure")
+        @fusion_mcp.resource("fusion://design-structure")
         def get_design_structure():
             """Get the structure of the active design in Fusion 360."""
             try:
@@ -69,7 +111,7 @@ def run_mcp_server():
                 if not doc:
                     return {"error": "No active document"}
                 
-                if doc.documentType != adsk.core.DocumentTypes.FusionDesignDocumentType:
+                if str(doc.documentType) != "FusionDesignDocumentType":
                     return {"error": "Not a Fusion design document"}
                 
                 design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
@@ -98,10 +140,10 @@ def run_mcp_server():
                     "design_name": design.name,
                     "root_component": get_component_data(root_comp)
                 }
-            except:
-                return {"error": traceback.format_exc()}
+            except Exception as e:
+                return {"error": str(e) + "\n" + traceback.format_exc()}
         
-        @fusion_mcp.resource("parameters")
+        @fusion_mcp.resource("fusion://parameters")
         def get_parameters():
             """Get the parameters of the active design in Fusion 360."""
             try:
@@ -109,7 +151,7 @@ def run_mcp_server():
                 if not doc:
                     return {"error": "No active document"}
                 
-                if doc.documentType != adsk.core.DocumentTypes.FusionDesignDocumentType:
+                if str(doc.documentType) != "FusionDesignDocumentType":
                     return {"error": "Not a Fusion design document"}
                 
                 design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
@@ -127,440 +169,492 @@ def run_mcp_server():
                     })
                 
                 return {"parameters": params}
-            except:
-                return {"error": traceback.format_exc()}
+            except Exception as e:
+                return {"error": str(e) + "\n" + traceback.format_exc()}
         
+        print("Registering tools...")
         # Define tools
         @fusion_mcp.tool()
         def message_box(message: str) -> str:
             """Display a message box in Fusion 360."""
             try:
-                def show_message():
-                    ui.messageBox(message)
-                app.executeInApplicationContext(show_message)
+                ui.messageBox(message)
                 return "Message displayed successfully"
-            except:
-                return f"Error displaying message: {traceback.format_exc()}"
+            except Exception as e:
+                return f"Error displaying message: {str(e)}"
         
         @fusion_mcp.tool()
         def create_new_sketch(plane_name: str) -> str:
             """Create a new sketch on the specified plane."""
             try:
-                def create_sketch():
-                    doc = app.activeDocument
-                    if not doc:
-                        return "No active document"
-                    
-                    if doc.documentType != adsk.core.DocumentTypes.FusionDesignDocumentType:
-                        return "Not a Fusion design document"
-                    
-                    design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
-                    if not design:
-                        return "No design in document"
-                    
-                    root_comp = design.rootComponent
-                    
-                    # Find the plane
-                    construction_planes = root_comp.constructionPlanes
-                    sketch_plane = None
-                    
-                    # Check if the plane_name is a standard plane (XY, YZ, XZ)
-                    if plane_name == "XY":
-                        sketch_plane = root_comp.xYConstructionPlane
-                    elif plane_name == "YZ":
-                        sketch_plane = root_comp.yZConstructionPlane
-                    elif plane_name == "XZ":
-                        sketch_plane = root_comp.xZConstructionPlane
-                    else:
-                        # Try to find a construction plane with the given name
-                        for i in range(construction_planes.count):
-                            plane = construction_planes.item(i)
-                            if plane.name == plane_name:
-                                sketch_plane = plane
-                                break
-                    
-                    if not sketch_plane:
-                        return f"Could not find plane: {plane_name}"
-                    
-                    # Create the sketch
-                    sketches = root_comp.sketches
-                    sketch = sketches.add(sketch_plane)
-                    sketch.name = f"Sketch_MCP_{int(time.time()) % 10000}"
-                    
-                    return f"Sketch created: {sketch.name}"
+                doc = app.activeDocument
+                if not doc:
+                    return "No active document"
                 
-                result = app.executeInApplicationContext(create_sketch)
-                return result
-            except:
-                return f"Error creating sketch: {traceback.format_exc()}"
+                if str(doc.documentType) != "FusionDesignDocumentType":
+                    return "Not a Fusion design document"
+                
+                design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
+                if not design:
+                    return "No design in document"
+                
+                root_comp = design.rootComponent
+                
+                # Find the plane
+                sketch_plane = None
+                
+                # Check if the plane_name is a standard plane (XY, YZ, XZ)
+                if plane_name == "XY":
+                    sketch_plane = root_comp.xYConstructionPlane
+                elif plane_name == "YZ":
+                    sketch_plane = root_comp.yZConstructionPlane
+                elif plane_name == "XZ":
+                    sketch_plane = root_comp.xZConstructionPlane
+                else:
+                    # Try to find a construction plane with the given name
+                    construction_planes = root_comp.constructionPlanes
+                    for i in range(construction_planes.count):
+                        plane = construction_planes.item(i)
+                        if plane.name == plane_name:
+                            sketch_plane = plane
+                            break
+                
+                if not sketch_plane:
+                    return f"Could not find plane: {plane_name}"
+                
+                # Create the sketch
+                sketches = root_comp.sketches
+                sketch = sketches.add(sketch_plane)
+                sketch.name = f"Sketch_MCP_{int(time.time()) % 10000}"
+                
+                return f"Sketch created successfully: {sketch.name}"
+            except Exception as e:
+                return f"Error creating sketch: {str(e)}"
         
         @fusion_mcp.tool()
-        def create_parameter(name: str, expression: str, unit: str = "", comment: str = "") -> str:
+        def create_parameter(name: str, expression: str, unit: str, comment: str = "") -> str:
             """Create a new parameter in the active design."""
             try:
-                def create_param():
-                    doc = app.activeDocument
-                    if not doc:
-                        return "No active document"
-                    
-                    if doc.documentType != adsk.core.DocumentTypes.FusionDesignDocumentType:
-                        return "Not a Fusion design document"
-                    
-                    design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
-                    if not design:
-                        return "No design in document"
-                    
-                    # Check if the parameter already exists
-                    try:
-                        existing_param = design.userParameters.itemByName(name)
-                        if existing_param:
-                            # Update the parameter
-                            existing_param.expression = expression
-                            if unit:
-                                existing_param.unit = unit
-                            if comment:
-                                existing_param.comment = comment
-                            return f"Parameter updated: {name}"
-                    except:
-                        # Parameter doesn't exist, create it
-                        param = design.userParameters.add(name, adsk.core.ValueInput.createByString(expression), unit, comment)
-                        return f"Parameter created: {name}"
+                doc = app.activeDocument
+                if not doc:
+                    return "No active document"
                 
-                result = app.executeInApplicationContext(create_param)
-                return result
-            except:
-                return f"Error creating parameter: {traceback.format_exc()}"
+                if str(doc.documentType) != "FusionDesignDocumentType":
+                    return "Not a Fusion design document"
+                
+                design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
+                if not design:
+                    return "No design in document"
+                
+                # Create the parameter
+                param = design.userParameters.add(name, adsk.core.ValueInput.createByString(expression), unit, comment)
+                
+                return f"Parameter created successfully: {param.name} = {param.expression}"
+            except Exception as e:
+                return f"Error creating parameter: {str(e)}"
         
+        print("Registering prompts...")
         # Define prompts
         @fusion_mcp.prompt()
-        def create_sketch_prompt() -> str:
-            """Prompt template for creating a sketch."""
-            return """
-You are a Fusion 360 sketch assistant. Create a sketch based on the user's description.
-
-Use these Fusion 360 tools:
-1. create_new_sketch - Creates a new sketch on a specified plane
-2. get_active_document_info - Gets information about the active document
-3. message_box - Displays a message box
-
-Steps to create a sketch:
-1. Create a new sketch using create_new_sketch
-2. Use appropriate sketch tools to draw the geometry
-3. Notify the user when complete
-
-Example:
-User: Create a circle on the XY plane
-Assistant: I'll create a circle on the XY plane.
-(calls create_new_sketch with plane_name="XY")
-(calls message_box with message="Circle sketch created successfully")
+        def create_sketch_prompt(description: str) -> dict:
+            """Create a prompt for creating a sketch based on a description."""
+            return {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are an expert in Fusion 360 CAD modeling. Your task is to help the user create sketches based on their descriptions.
+                        
+Be very specific about what planes to use and what sketch entities to create.
 """
+                    },
+                    {
+                        "role": "user",
+                        "content": f"I want to create a sketch with these requirements: {description}\n\nPlease provide step-by-step instructions for creating this sketch in Fusion 360."
+                    }
+                ]
+            }
         
         @fusion_mcp.prompt()
-        def parameter_setup_prompt() -> str:
-            """Prompt template for setting up parameters."""
-            return """
-You are a Fusion 360 parameter assistant. Create parameters based on the user's description.
+        def parameter_setup_prompt(description: str) -> dict:
+            """Create a prompt for setting up parameters based on a description."""
+            return {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": """You are an expert in Fusion 360 parametric design. Your task is to help the user set up parameters for their design.
 
-Use these Fusion 360 tools:
-1. create_parameter - Creates a new parameter with name, expression, unit, and comment
-2. get_parameters - Gets a list of all parameters in the design
-3. message_box - Displays a message box
-
-Steps to create parameters:
-1. Use get_parameters to check existing parameters
-2. Create or update parameters using create_parameter
-3. Notify the user when complete
-
-Example:
-User: Create a parameter for width with value 10 mm
-Assistant: I'll create a width parameter.
-(calls create_parameter with name="width", expression="10 mm", unit="mm", comment="Width parameter")
-(calls message_box with message="Width parameter created successfully")
+Suggest appropriate parameters, their values, units, and purposes based on the user's description.
 """
+                    },
+                    {
+                        "role": "user",
+                        "content": f"I want to set up parameters for: {description}\n\nWhat parameters should I create, and what values, units, and comments should they have?"
+                    }
+                ]
+            }
         
-        # Create directory for communication files
-        # Check both possible locations - within the add-in and in the workspace
-        workspace_dir = Path("C:/Users/Joseph/Documents/code/fusion-mcp-server")
-        workspace_comm_dir = workspace_dir / "mcp_comm"
-        addin_comm_dir = Path(__file__).parent.parent.parent / "mcp_comm"
+        # Set up file-based communication
+        print("Setting up file-based communication...")
         
-        # Use both directories for communication
-        comm_dirs = []
+        # Paths for the add-in and workspace directories
+        addon_path = os.path.dirname(os.path.dirname(__file__))
+        addon_comm_dir = os.path.join(addon_path, "mcp_comm")
+        os.makedirs(addon_comm_dir, exist_ok=True)
         
-        # Add add-in directory 
-        addin_comm_dir.mkdir(exist_ok=True)
-        comm_dirs.append(addin_comm_dir)
+        # Workspace path (the fusion-mcp-server repository)
+        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+        workspace_comm_dir = Path(workspace_path) / "mcp_comm"
+        if os.path.exists(workspace_path):
+            os.makedirs(str(workspace_comm_dir), exist_ok=True)
         
-        # Add workspace directory if it exists
-        if workspace_dir.exists():
-            workspace_comm_dir.mkdir(exist_ok=True)
-            comm_dirs.append(workspace_comm_dir)
-            
-        app.log(f"Monitoring communication directories: {[str(d) for d in comm_dirs]}")
-            
-        # Create ready file
-        ready_file_paths = [
-            Path(__file__).parent.parent.parent / "mcp_server_ready.txt",
-            Path(__file__).parent.parent / "mcp_server_ready.txt",
-            addin_comm_dir / "mcp_server_ready.txt",
-            workspace_comm_dir / "mcp_server_ready.txt",
-            Path.home() / "Desktop" / "mcp_server_ready.txt"
+        # Create a list of communication directories to monitor
+        comm_dirs = [
+            addon_comm_dir,
+            str(workspace_comm_dir)
         ]
         
-        for ready_file_path in ready_file_paths:
+        # Create desktop path for ready file
+        ready_file_desktop = os.path.expanduser("~/Desktop/mcp_server_ready.txt")
+        
+        # Create server info file
+        server_info_file = os.path.join(workspace_comm_dir, "mcp_server_info.txt")
+        with open(server_info_file, "w") as f:
+            f.write(f"MCP Server started at {time.ctime()}\n")
+            f.write(f"Python version: {sys.version}\n")
+        
+        # Create server status file with JSON structure
+        server_status_file = os.path.join(workspace_comm_dir, "server_status.json")
+        with open(server_status_file, "w") as f:
+            status_data = {
+                "status": "running",
+                "started_at": time.ctime(),
+                "server_url": "http://127.0.0.1:3000/sse",
+                "fusion_version": app.version,
+                "available_resources": [
+                    "fusion://active-document-info",
+                    "fusion://design-structure",
+                    "fusion://parameters"
+                ],
+                "available_tools": [
+                    "message_box",
+                    "create_new_sketch",
+                    "create_parameter"
+                ],
+                "available_prompts": [
+                    "create_sketch_prompt",
+                    "parameter_setup_prompt"
+                ]
+            }
+            json.dump(status_data, f, indent=2)
+        
+        # Create all ready file paths
+        ready_files = [
+            ready_file_desktop,
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server_ready.txt"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "mcp_server_ready.txt"),
+            os.path.join(workspace_path, "mcp_server_ready.txt"),
+            str(workspace_comm_dir / "mcp_server_ready.txt")
+        ]
+        
+        # Create all ready files
+        for ready_file in ready_files:
             try:
-                with open(ready_file_path, 'w') as f:
-                    f.write(f"Fusion 360 MCP Server ready at {time.ctime()}")
-                print(f"Created ready file at: {ready_file_path}")
-            except:
-                print(f"Could not create ready file at: {ready_file_path}")
-        
-        # Handle file-based communication
-        def file_based_communication():
-            print("Starting file-based communication handler...")
-            
-            while server_running:
-                # Check for command files in all comm_dirs
-                try:
-                    for comm_dir in comm_dirs:
-                        for cmd_file in comm_dir.glob("command_*.json"):
-                            try:
-                                print(f"Found command file: {cmd_file}")
-                                with open(cmd_file, 'r') as f:
-                                    cmd_data = json.load(f)
-                                
-                                # Process the command
-                                cmd_id = cmd_data.get('id', 0)
-                                cmd_name = cmd_data.get('command', '')
-                                cmd_params = cmd_data.get('params', {})
-                                
-                                # Create response file in the same directory as the command file
-                                response_file = cmd_file.parent / f"response_{cmd_id}.json"
-                                
-                                # Skip if response already exists
-                                if response_file.exists():
-                                    continue
-                                
-                                # Process different commands
-                                response_data = {"id": cmd_id, "success": False, "error": "Unknown command"}
-                                
-                                if cmd_name == "list_resources":
-                                    resources = ["active-document-info", "design-structure", "parameters"]
-                                    response_data = {"id": cmd_id, "success": True, "resources": resources}
-                                
-                                elif cmd_name == "get_resource":
-                                    resource_name = cmd_params.get("resource_name", "")
-                                    if resource_name == "active-document-info":
-                                        response_data = {"id": cmd_id, "success": True, "data": get_active_document_info()}
-                                    elif resource_name == "design-structure":
-                                        response_data = {"id": cmd_id, "success": True, "data": get_design_structure()}
-                                    elif resource_name == "parameters":
-                                        response_data = {"id": cmd_id, "success": True, "data": get_parameters()}
-                                    else:
-                                        response_data = {"id": cmd_id, "success": False, "error": f"Unknown resource: {resource_name}"}
-                                
-                                elif cmd_name == "list_tools":
-                                    tools = ["message_box", "create_new_sketch", "create_parameter"]
-                                    response_data = {"id": cmd_id, "success": True, "tools": tools}
-                                
-                                elif cmd_name == "call_tool":
-                                    tool_name = cmd_params.get("tool_name", "")
-                                    tool_params = cmd_params.get("params", {})
-                                    
-                                    if tool_name == "message_box":
-                                        message = tool_params.get("message", "")
-                                        result = message_box(message)
-                                        response_data = {"id": cmd_id, "success": True, "result": result}
-                                    
-                                    elif tool_name == "create_new_sketch":
-                                        plane_name = tool_params.get("plane_name", "XY")
-                                        result = create_new_sketch(plane_name)
-                                        response_data = {"id": cmd_id, "success": True, "result": result}
-                                    
-                                    elif tool_name == "create_parameter":
-                                        name = tool_params.get("name", "")
-                                        expression = tool_params.get("expression", "")
-                                        unit = tool_params.get("unit", "")
-                                        comment = tool_params.get("comment", "")
-                                        result = create_parameter(name, expression, unit, comment)
-                                        response_data = {"id": cmd_id, "success": True, "result": result}
-                                    
-                                    else:
-                                        response_data = {"id": cmd_id, "success": False, "error": f"Unknown tool: {tool_name}"}
-                                
-                                elif cmd_name == "list_prompts":
-                                    prompts = ["create_sketch_prompt", "parameter_setup_prompt"]
-                                    response_data = {"id": cmd_id, "success": True, "prompts": prompts}
-                                
-                                elif cmd_name == "get_prompt":
-                                    prompt_name = cmd_params.get("prompt_name", "")
-                                    if prompt_name == "create_sketch_prompt":
-                                        response_data = {"id": cmd_id, "success": True, "content": create_sketch_prompt()}
-                                    elif prompt_name == "parameter_setup_prompt":
-                                        response_data = {"id": cmd_id, "success": True, "content": parameter_setup_prompt()}
-                                    else:
-                                        response_data = {"id": cmd_id, "success": False, "error": f"Unknown prompt: {prompt_name}"}
-                                
-                                elif cmd_name == "message_box":
-                                    message = cmd_params.get("message", "")
-                                    result = message_box(message)
-                                    response_data = {"id": cmd_id, "success": True, "result": result}
-                                
-                                # Write response file
-                                with open(response_file, 'w') as f:
-                                    json.dump(response_data, f, indent=2)
-                                
-                                print(f"Created response file: {response_file}")
-                                
-                                # Delete command file after processing
-                                cmd_file.unlink()
-                                
-                            except Exception as e:
-                                print(f"Error processing command file {cmd_file}: {str(e)}")
-                                traceback.print_exc()
-                                
-                                # Create error response
-                                try:
-                                    with open(cmd_file, 'r') as f:
-                                        cmd_data = json.load(f)
-                                    cmd_id = cmd_data.get('id', 0)
-                                    response_file = cmd_file.parent / f"response_{cmd_id}.json"
-                                    
-                                    error_response = {
-                                        "id": cmd_id,
-                                        "success": False,
-                                        "error": str(e),
-                                        "traceback": traceback.format_exc()
-                                    }
-                                    
-                                    with open(response_file, 'w') as f:
-                                        json.dump(error_response, f, indent=2)
-                                    
-                                    # Delete command file after processing
-                                    cmd_file.unlink()
-                                except:
-                                    pass
-                
-                except Exception as e:
-                    print(f"Error in file-based communication handler: {str(e)}")
-                    traceback.print_exc()
-                
-                # Check for message files
-                try:
-                    for comm_dir in comm_dirs:
-                        message_file = comm_dir / "message_box.txt"
-                        if message_file.exists():
-                            try:
-                                with open(message_file, 'r') as f:
-                                    content = f.read().strip()
-                                
-                                if content.startswith("DISPLAY_MESSAGE:"):
-                                    message = content[len("DISPLAY_MESSAGE:"):].strip()
-                                    message_box(message)
-                                
-                                # Rename the file to prevent reprocessing
-                                processed_file = message_file.parent / f"message_box_processed_{int(time.time())}.txt"
-                                message_file.rename(processed_file)
-                                
-                            except Exception as e:
-                                print(f"Error processing message file: {str(e)}")
-                                traceback.print_exc()
-                except:
-                    pass
-                
-                # Sleep before checking again
-                time.sleep(0.5)
-        
-        # Start file-based communication in a thread
-        comm_thread = threading.Thread(target=file_based_communication)
-        comm_thread.daemon = True
-        comm_thread.start()
+                os.makedirs(os.path.dirname(ready_file), exist_ok=True)
+                with open(ready_file, "w") as f:
+                    f.write(f"MCP Server Ready - {time.ctime()}")
+                print(f"Created ready file: {ready_file}")
+            except Exception as e:
+                print(f"Error creating ready file at {ready_file}: {str(e)}")
         
         # Run the FastMCP server
-        app.log("Starting MCP server using FastMCP")
-        app.log("This will allow for both file-based and JSON-RPC communication")
+        print("Starting MCP server using FastMCP with uvicorn")
         
-        # Start the server in HTTP mode (non-blocking)
-        try:
-            mcp_port = 3030
-            fusion_mcp.run(port=mcp_port)
-            app.log(f"MCP server started on port {mcp_port}")
-        except Exception as e:
-            app.log(f"Error starting MCP server: {str(e)}")
-            traceback.print_exc()
-            
-            # Create an error notification file
+        # Get the Starlette app from the sse_app method
+        sse_app = fusion_mcp.sse_app()
+        
+        # Port and host for the server
+        host = "127.0.0.1"
+        port = 3000  # Default port for SSE
+        
+        # Create a Config instance for uvicorn
+        config = uvicorn.Config(
+            sse_app,
+            host=host,
+            port=port,
+            log_level="info"
+        )
+        
+        # Create server instance
+        server = uvicorn.Server(config)
+        
+        # Run server in a separate thread
+        def uvicorn_thread():
             try:
-                workspace_dir = Path("C:/Users/Joseph/Documents/code/fusion-mcp-server")
-                workspace_comm_dir = workspace_dir / "mcp_comm"
-                addin_comm_dir = Path(__file__).parent.parent.parent / "mcp_comm"
+                # Create initialization log
+                init_log_file = os.path.join(workspace_comm_dir, "mcp_server_init.log")
+                with open(init_log_file, "w") as f:
+                    f.write(f"Starting uvicorn server at {time.ctime()}\n")
+                    f.write(f"Host: {host}, Port: {port}\n")
                 
-                # Try both locations
-                error_dirs = [addin_comm_dir, workspace_comm_dir]
+                # Run the server
+                server.run()
+            except Exception as e:
+                error_msg = f"Error in uvicorn server: {str(e)}"
+                print(error_msg)
                 
-                for error_dir in error_dirs:
-                    error_dir.mkdir(exist_ok=True)
-                    error_file = error_dir / "mcp_server_error.txt"
-                    with open(error_file, 'w') as f:
-                        f.write(f"MCP Server Error: {str(e)}\n\n{traceback.format_exc()}")
-            except:
-                pass
+                # Write error to file
+                error_file = os.path.join(workspace_comm_dir, "mcp_server_uvicorn_error.txt")
+                with open(error_file, "w") as f:
+                    f.write(error_msg + "\n")
+                    f.write(traceback.format_exc())
         
-        # Keep the thread running
+        # Start the server in a thread
+        uvicorn_thread = threading.Thread(target=uvicorn_thread)
+        uvicorn_thread.daemon = True
+        uvicorn_thread.start()
+        
+        print(f"MCP server started at http://{host}:{port}/sse")
+        
+        # Monitor for command files in a separate thread
+        def file_monitor_thread():
+            try:
+                print("Starting file monitor thread...")
+                
+                # Create a file to track thread status
+                monitor_file = os.path.join(workspace_comm_dir, "file_monitor_status.txt")
+                with open(monitor_file, "w") as f:
+                    f.write(f"File monitor thread started at {time.ctime()}\n")
+                
+                while server_running:
+                    # Check each communication directory for command files
+                    for comm_dir in comm_dirs:
+                        try:
+                            # Create directory if it doesn't exist
+                            os.makedirs(comm_dir, exist_ok=True)
+                            
+                            # Check for message box files
+                            message_file = os.path.join(comm_dir, "message_box.txt")
+                            if os.path.exists(message_file):
+                                try:
+                                    with open(message_file, "r") as f:
+                                        message = f.read().strip()
+                                    
+                                    # Display the message
+                                    print(f"Displaying message box: {message}")
+                                    ui.messageBox(message)
+                                    
+                                    # Rename the file to avoid processing it again
+                                    processed_file = os.path.join(comm_dir, f"processed_message_{int(time.time())}.txt")
+                                    os.rename(message_file, processed_file)
+                                except Exception as e:
+                                    print(f"Error processing message file {message_file}: {str(e)}")
+                            
+                            # Check for command files
+                            for file in os.listdir(comm_dir):
+                                if file.startswith("command_") and file.endswith(".json"):
+                                    command_file = os.path.join(comm_dir, file)
+                                    try:
+                                        # Extract the command ID from the filename
+                                        command_id = file.split("_")[1].split(".")[0]
+                                        
+                                        # Check if we've already processed this command
+                                        processed_file = os.path.join(comm_dir, f"processed_command_{command_id}.json")
+                                        response_file = os.path.join(comm_dir, f"response_{command_id}.json")
+                                        
+                                        if os.path.exists(processed_file) or os.path.exists(response_file):
+                                            continue  # Skip if already processed
+                                        
+                                        print(f"Processing command file: {command_file}")
+                                        
+                                        # Read command data
+                                        try:
+                                            with open(command_file, "r") as f:
+                                                command_data = json.load(f)
+                                            
+                                            command = command_data.get("command")
+                                            params = command_data.get("params", {})
+                                            
+                                            print(f"Processing command {command_id}: {command} with params {params}")
+                                            
+                                            result = None
+                                            
+                                            # Handle the command
+                                            if command == "list_resources":
+                                                # Get available resources
+                                                resources = [
+                                                    "fusion://active-document-info",
+                                                    "fusion://design-structure",
+                                                    "fusion://parameters"
+                                                ]
+                                                result = resources
+                                            elif command == "list_tools":
+                                                # Get available tools
+                                                tools = [
+                                                    {"name": "message_box", "description": "Display a message box in Fusion 360"},
+                                                    {"name": "create_new_sketch", "description": "Create a new sketch on the specified plane"},
+                                                    {"name": "create_parameter", "description": "Create a new parameter in the active design"}
+                                                ]
+                                                result = tools
+                                            elif command == "list_prompts":
+                                                # Get available prompts
+                                                prompts = [
+                                                    {"name": "create_sketch_prompt", "description": "Create a prompt for creating a sketch based on a description"},
+                                                    {"name": "parameter_setup_prompt", "description": "Create a prompt for setting up parameters based on a description"}
+                                                ]
+                                                result = prompts
+                                            elif command == "message_box":
+                                                # Display a message box
+                                                message = params.get("message", "")
+                                                ui.messageBox(message)
+                                                result = "Message displayed successfully"
+                                            elif command == "create_new_sketch":
+                                                # Create a new sketch
+                                                result = create_new_sketch(params.get("plane_name", "XY"))
+                                            elif command == "create_parameter":
+                                                # Create a new parameter
+                                                result = create_parameter(
+                                                    params.get("name", f"Param_{int(time.time()) % 10000}"),
+                                                    params.get("expression", "10"),
+                                                    params.get("unit", "mm"),
+                                                    params.get("comment", "")
+                                                )
+                                            else:
+                                                result = f"Unknown command: {command}"
+                                            
+                                            # Write the response
+                                            with open(response_file, "w") as f:
+                                                json.dump({"result": result}, f, indent=2)
+                                            
+                                            # Rename the command file to avoid processing it again
+                                            os.rename(command_file, processed_file)
+                                        except json.JSONDecodeError as e:
+                                            # Handle JSON parsing error
+                                            print(f"Error parsing JSON in {command_file}: {str(e)}")
+                                            with open(response_file, "w") as f:
+                                                json.dump({"error": f"Invalid JSON format: {str(e)}"}, f, indent=2)
+                                    except Exception as e:
+                                        print(f"Error processing command file {command_file}: {str(e)}")
+                                        traceback.print_exc()
+                                        
+                                        # Try to create an error response anyway
+                                        try:
+                                            with open(os.path.join(comm_dir, f"response_{command_id}.json"), "w") as f:
+                                                json.dump({"error": str(e)}, f, indent=2)
+                                        except Exception:
+                                            pass
+                        except Exception as e:
+                            print(f"Error processing directory {comm_dir}: {str(e)}")
+                            error_file = os.path.join(workspace_comm_dir, "error.txt")
+                            with open(error_file, "w") as f:
+                                f.write(f"Error in file monitor for directory {comm_dir}: {str(e)}\n\n{traceback.format_exc()}")
+                    
+                    # Sleep to avoid high CPU usage
+                    time.sleep(0.5)
+            except Exception as e:
+                print(f"Error in file monitor thread: {str(e)}")
+                error_file = os.path.join(workspace_comm_dir, "error.txt")
+                with open(error_file, "w") as f:
+                    f.write(f"File Monitor Error: {str(e)}\n\n{traceback.format_exc()}")
+        
+        # Start the file monitor thread
+        file_monitor = threading.Thread(target=file_monitor_thread)
+        file_monitor.daemon = True
+        file_monitor.start()
+        
+        # Keep thread running
         while server_running:
             time.sleep(1)
             
-    except Exception as e:
-        app.log(f"Error in MCP server thread: {str(e)}")
-        traceback.print_exc()
+        # Shutdown the server
+        print("Shutting down server...")
+        server.should_exit = True
         
-        # Create an error notification file
-        try:
-            workspace_dir = Path("C:/Users/Joseph/Documents/code/fusion-mcp-server")
-            workspace_comm_dir = workspace_dir / "mcp_comm"
-            addin_comm_dir = Path(__file__).parent.parent.parent / "mcp_comm"
-            
-            # Try both locations
-            error_dirs = [addin_comm_dir, workspace_comm_dir]
-            
-            for error_dir in error_dirs:
-                error_dir.mkdir(exist_ok=True)
-                error_file = error_dir / "mcp_server_error.txt"
-                with open(error_file, 'w') as f:
-                    f.write(f"MCP Server Error: {str(e)}\n\n{traceback.format_exc()}")
-        except:
-            pass
+        return True
+        
+    except Exception as e:
+        print(f"Error in MCP server: {str(e)}")
+        
+        # Create error file
+        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+        if os.path.exists(workspace_path):
+            workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+            os.makedirs(workspace_comm_dir, exist_ok=True)
+            error_file = os.path.join(workspace_comm_dir, "mcp_server_error.txt")
+            with open(error_file, "w") as f:
+                f.write(f"MCP Server Error: {str(e)}\n\n{traceback.format_exc()}")
+        
+        return False
 
 # Function to start the server
 def start_server():
-    global server_thread, server_running
+    global server_thread
+    global server_running
     
-    if server_running:
-        app.log("MCP server is already running")
-        return
+    print("Starting MCP server...")
+    
+    # Create workspace comm directory if it doesn't exist
+    workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+    workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+    if os.path.exists(workspace_path):
+        os.makedirs(workspace_comm_dir, exist_ok=True)
+        # Create a log file
+        log_file = os.path.join(workspace_comm_dir, "mcp_server_log.txt")
+        with open(log_file, "w") as f:
+            f.write(f"MCP Server starting at {time.ctime()}\n")
     
     # Check if MCP is installed
     if not check_mcp_installed():
-        app.log("MCP package is not installed. Please install it with: pip install 'mcp[cli]'")
-        ui.messageBox("MCP package is not installed. Please install it with: pip install \"mcp[cli]\"")
-        return
+        print("Required packages not installed. Cannot start server.")
+        ui.messageBox("Required packages are not installed. Please install them with:\npip install \"mcp[cli]\" uvicorn")
+        return False
     
-    # Set server running flag
+    # Check if server is already running
+    if server_running and server_thread and server_thread.is_alive():
+        print("MCP server is already running")
+        return True
+    
+    # Reset server state
     server_running = True
     
     # Start server in a separate thread
-    server_thread = threading.Thread(target=run_mcp_server)
+    def server_thread_func():
+        try:
+            success = run_mcp_server()
+            if not success:
+                print("Failed to start MCP server")
+                server_running = False
+                ui.messageBox("Failed to start MCP server. See error log for details.")
+        except Exception as e:
+            print(f"Error in server thread: {str(e)}")
+            server_running = False
+            error_file = os.path.join(workspace_comm_dir, "mcp_server_error.txt")
+            with open(error_file, "w") as f:
+                f.write(f"MCP Server Thread Error: {str(e)}\n\n{traceback.format_exc()}")
+    
+    server_thread = threading.Thread(target=server_thread_func)
     server_thread.daemon = True
     server_thread.start()
     
-    app.log("MCP server started")
+    print("MCP server thread started")
+    
+    # Wait a moment for the server to initialize
+    time.sleep(1)
+    
+    # Check if the thread is still alive
+    if not server_thread.is_alive():
+        print("MCP server thread stopped unexpectedly")
+        server_running = False
+        return False
+    
+    print("MCP server started successfully")
+    return True
 
 # Function to stop the server
 def stop_server():
     global server_running
     
     if not server_running:
-        app.log("MCP server is not running")
+        print("MCP server is not running")
         return
     
     # Set server running flag to stop the server loop
@@ -570,131 +664,181 @@ def stop_server():
     if server_thread and server_thread.is_alive():
         server_thread.join(timeout=2.0)
     
-    app.log("MCP server stopped")
+    print("MCP server stopped")
 
 # Command event handlers
 class MCPServerCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
         super().__init__()
-        
+    
     def notify(self, args):
         try:
+            # Get command inputs
             cmd = args.command
+            inputs = cmd.commandInputs
             
-            # Add a simple button to start/stop the server
-            cmd.isExecutedWhenPreEmpted = False
-            cmd.isOKButtonVisible = True
-            cmd.okButtonText = "Toggle Server"
+            # Add information text
+            info_input = inputs.addTextBoxCommandInput('infoInput', '', 
+                'Click OK to start the MCP Server.\n\n' +
+                'This will enable communication between Fusion 360 and MCP clients.\n\n' +
+                'Current server status: ' + ('Running' if server_running else 'Not Running'), 
+                4, True)
             
-            # Update information about server status in the dialog's title
-            if server_running:
-                cmd.dialogTitle = "MCP Server (Running)"
-            else:
-                cmd.dialogTitle = "MCP Server (Stopped)"
-                
-            # Create a read-only text box to show server status
-            statusInput = cmd.commandInputs.addTextBoxCommandInput('serverStatus', 'Server Status', 
-                                                                 "The MCP server is " + 
-                                                                 ("running" if server_running else "not running"), 
-                                                                 3, True)
-            
-            # Connect to the execute event
+            # Events
             onExecute = MCPServerCommandExecuteHandler()
             cmd.execute.add(onExecute)
-            futil.add_handler(cmd.execute, onExecute)
+            handlers.append(onExecute)
             
-            # Connect to the destroy event
             onDestroy = MCPServerCommandDestroyHandler()
             cmd.destroy.add(onDestroy)
-            futil.add_handler(cmd.destroy, onDestroy)
-            
+            handlers.append(onDestroy)
         except:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            if ui:
+                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 class MCPServerCommandExecuteHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
-        
+    
     def notify(self, args):
         try:
-            # Toggle server state
-            global server_running
+            # Start the server
+            success = start_server()
             
-            if server_running:
-                stop_server()
-                ui.messageBox('MCP Server stopped')
-            else:
-                start_server()
-                if server_running:
-                    ui.messageBox('MCP Server started')
+            if success:
+                workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+                workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
                 
+                # Create a startup log file
+                startup_log_file = os.path.join(workspace_comm_dir, "mcp_server_startup_log.txt")
+                with open(startup_log_file, "w") as f:
+                    f.write(f"MCP Server started successfully at {time.ctime()}\n")
+                    f.write(f"Server URL: http://127.0.0.1:3000/sse\n")
+                    f.write(f"Communication directory: {workspace_comm_dir}\n")
+                
+                ui.messageBox("MCP Server started successfully!\n\nServer is running at http://127.0.0.1:3000/sse\n\nReady for client connections.")
+            else:
+                workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+                workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+                
+                # Check for error file
+                error_file = os.path.join(workspace_comm_dir, "mcp_server_error.txt")
+                error_message = "Unknown error. See error log for details."
+                
+                if os.path.exists(error_file):
+                    try:
+                        with open(error_file, "r") as f:
+                            error_message = f.read()
+                    except:
+                        pass
+                
+                ui.messageBox(f"Failed to start MCP Server. Error: {error_message}")
         except:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            if ui:
+                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 class MCPServerCommandDestroyHandler(adsk.core.CommandEventHandler):
     def __init__(self):
         super().__init__()
-        
+    
     def notify(self, args):
         try:
-            # Cleanup if needed
+            # Clean up as needed
             pass
         except:
+            if ui:
+                ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
+# Function to stop server on add-in stop
+def stop_server_on_stop(context):
+    try:
+        global server_running
+        
+        if server_running:
+            print("Stopping MCP server...")
+            server_running = False
+            
+            # Create a shutdown log file
+            workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+            workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+            os.makedirs(workspace_comm_dir, exist_ok=True)
+            
+            shutdown_log_file = os.path.join(workspace_comm_dir, "mcp_server_shutdown_log.txt")
+            with open(shutdown_log_file, "w") as f:
+                f.write(f"MCP Server stopped at {time.ctime()}\n")
+            
+            # Wait for the thread to finish
+            if server_thread and server_thread.is_alive():
+                server_thread.join(timeout=2.0)
+            
+            print("MCP server stopped")
+    except:
+        if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-# Create the command definition
-def start():
-    """Called when the add-in is starting."""
+# Function to create the UI elements
+def create_ui():
     try:
-        # Create the command definition
-        cmd_def = ui.commandDefinitions.itemById('MCPServerCommand')
-        if not cmd_def:
-            cmd_def = ui.commandDefinitions.addButtonDefinition(
-                'MCPServerCommand',
-                'MCP Server',
-                'Start or stop the Model Context Protocol server',
-                './resources'
-            )
+        # Get the command definitions
+        command_definitions = ui.commandDefinitions
         
-        # Connect to command created event
-        onCommandCreated = MCPServerCommandCreatedHandler()
-        cmd_def.commandCreated.add(onCommandCreated)
-        futil.add_handler(cmd_def.commandCreated, onCommandCreated)
+        # Create a command definition for the MCP server command
+        mcp_server_cmd_def = command_definitions.itemById('MCPServerCommand')
+        if not mcp_server_cmd_def:
+            mcp_server_cmd_def = command_definitions.addButtonDefinition('MCPServerCommand', 'MCP Server', 'Start the MCP Server for Fusion 360')
         
-        # Get the ADD-INS panel in the model workspace
-        workspace = ui.workspaces.itemById('FusionSolidEnvironment')
-        panel = workspace.toolbarPanels.itemById('SolidScriptsAddinsPanel')
+        # Connect to the command created event
+        on_command_created = MCPServerCommandCreatedHandler()
+        mcp_server_cmd_def.commandCreated.add(on_command_created)
+        handlers.append(on_command_created)
         
-        # Add the button to the panel
-        control = panel.controls.itemById('MCPServerCommand')
+        # Add to the add-ins panel
+        add_ins_panel = ui.allToolbarPanels.itemById('SolidScriptsAddinsPanel')
+        control = add_ins_panel.controls.itemById('MCPServerCommand')
         if not control:
-            panel.controls.addCommand(cmd_def)
+            add_ins_panel.controls.addCommand(mcp_server_cmd_def)
         
-        # Start the server automatically
-        app.log("Starting MCP server automatically")
-        start_server()
-        
+        print("MCP Server command added to UI")
     except:
-        ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+        if ui:
+            ui.messageBox('Failed to create UI:\n{}'.format(traceback.format_exc()))
+
+# Define the required start() and stop() functions for the add-in system
+def start():
+    """Called when the add-in is started."""
+    try:
+        create_ui()
+    except:
+        if ui:
+            ui.messageBox('Failed to initialize add-in:\n{}'.format(traceback.format_exc()))
 
 def stop():
-    """Called when the add-in is stopping."""
+    """Called when the add-in is stopped."""
     try:
-        # Stop the server if it's running
-        if server_running:
-            stop_server()
+        # Stop the server
+        stop_server_on_stop(None)
         
-        # Remove the command from the toolbar
-        workspace = ui.workspaces.itemById('FusionSolidEnvironment')
-        panel = workspace.toolbarPanels.itemById('SolidScriptsAddinsPanel')
-        command_control = panel.controls.itemById('MCPServerCommand')
-        if command_control:
-            command_control.deleteMe()
+        # Clean up UI
+        command_definitions = ui.commandDefinitions
+        mcp_server_cmd_def = command_definitions.itemById('MCPServerCommand')
+        if mcp_server_cmd_def:
+            mcp_server_cmd_def.deleteMe()
         
-        # Delete the command definition
-        command_definition = ui.commandDefinitions.itemById('MCPServerCommand')
-        if command_definition:
-            command_definition.deleteMe()
+        # Clean up any panels
+        add_ins_panel = ui.allToolbarPanels.itemById('SolidScriptsAddinsPanel')
+        control = add_ins_panel.controls.itemById('MCPServerCommand')
+        if control:
+            control.deleteMe()
             
+        print("MCP Server add-in stopped")
     except:
-        ui.messageBox('Failed:\n{}'.format(traceback.format_exc())) 
+        if ui:
+            ui.messageBox('Failed to clean up add-in:\n{}'.format(traceback.format_exc()))
+
+# Main entry point
+def run(context):
+    try:
+        create_ui()
+    except:
+        if ui:
+            ui.messageBox('Failed to run:\n{}'.format(traceback.format_exc())) 

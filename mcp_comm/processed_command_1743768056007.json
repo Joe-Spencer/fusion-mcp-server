@@ -1,0 +1,8 @@
+{
+  "command": "get_resource",
+  "params": {
+    "resource_name": "fusion://parameters"
+  },
+  "timestamp": 1743768056.0071354,
+  "id": 1743768056007
+}

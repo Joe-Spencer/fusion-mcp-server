@@ -1,0 +1,8 @@
+{
+  "command": "get_resource",
+  "params": {
+    "resource_name": "fusion://active-document-info"
+  },
+  "timestamp": 1743768055.7843213,
+  "id": 1743768055784
+}

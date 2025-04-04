@@ -1,0 +1,9 @@
+{
+  "id": 1743768055664,
+  "success": true,
+  "resources": [
+    "fusion://active-document-info",
+    "fusion://design-structure",
+    "fusion://parameters"
+  ]
+}

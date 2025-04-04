@@ -1,0 +1,6 @@
+Error processing command: [WinError 2] The system cannot find the file specified: 'C:/Users/Joseph/Documents/code/fusion-mcp-server\\mcp_comm\\command_1743768055784.json' -> 'C:/Users/Joseph/Documents/code/fusion-mcp-server\\mcp_comm\\processed_command_1743768055784.json'
+
+Traceback (most recent call last):
+  File "C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\commands\MCPServerCommand.py", line 335, in run_simple_server
+    os.rename(command_file, processed_file)
+FileNotFoundError: [WinError 2] The system cannot find the file specified: 'C:/Users/Joseph/Documents/code/fusion-mcp-server\\mcp_comm\\command_1743768055784.json' -> 'C:/Users/Joseph/Documents/code/fusion-mcp-server\\mcp_comm\\processed_command_1743768055784.json'

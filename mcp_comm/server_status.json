@@ -1,0 +1,20 @@
+{
+  "status": "running",
+  "started_at": "Fri Apr  4 11:12:23 2025",
+  "server_url": "http://127.0.0.1:3000/sse",
+  "fusion_version": "2601.0.90",
+  "available_resources": [
+    "fusion://active-document-info",
+    "fusion://design-structure",
+    "fusion://parameters"
+  ],
+  "available_tools": [
+    "message_box",
+    "create_new_sketch",
+    "create_parameter"
+  ],
+  "available_prompts": [
+    "create_sketch_prompt",
+    "parameter_setup_prompt"
+  ]
+}

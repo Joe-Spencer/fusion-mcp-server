@@ -1,0 +1,11 @@
+{
+  "command": "call_tool",
+  "params": {
+    "tool_name": "create_new_sketch",
+    "params": {
+      "plane_name": "XY"
+    }
+  },
+  "timestamp": 1743768056.358786,
+  "id": 1743768056358
+}

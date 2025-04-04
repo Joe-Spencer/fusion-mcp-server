@@ -3,349 +3,564 @@
 """
 MCP Client for Fusion 360
 
-This client connects to the Fusion 360 MCP server and provides
-a simple interface for testing the server functionality using
-stdio-based communication.
+Client to interact with the Fusion 360 MCP server.
+This client supports both the MCP SDK connection method and file-based communication.
 """
 
 import os
 import sys
 import json
-import argparse
 import time
-import subprocess
-import traceback
+import argparse
 from pathlib import Path
+import urllib.request
+import asyncio
+from typing import Optional, Dict, List, Any, Tuple
 
 # Print debugging information
 print(f"Python executable: {sys.executable}")
 print(f"Python version: {sys.version}")
-print(f"Python path: {sys.path}")
 
-# Try to import MCP package
+# Find the location of the MCP package
 try:
     import mcp
-    has_mcp = True
-    print(f"MCP package found at: {mcp.__file__}")
-except ImportError:
-    has_mcp = False
-    print("MCP package not installed. Will use file-based communication instead.")
+    print(f"Found MCP package at: {mcp.__file__}")
+except ImportError as e:
+    print(f"MCP package not found. Error: {str(e)}")
+    print("You may need to install it with: pip install mcp[cli]")
+    mcp = None
 
-# Define the communication directory locations
-FUSION_ADDIN_PATH = Path("C:/Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns")
-FUSION_MCP_COMM_DIR = FUSION_ADDIN_PATH / "MCPserve" / "mcp_comm"
-LOCAL_MCP_COMM_DIR = Path(__file__).parent / "mcp_comm"
+# Parse command line arguments
+parser = argparse.ArgumentParser(description="Interact with the Fusion 360 MCP server")
+parser.add_argument("--url", default="http://127.0.0.1:3000/sse", help="Server SSE URL (default: %(default)s)")
+parser.add_argument("--timeout", type=int, default=10, help="Connection timeout in seconds (default: %(default)s)")
+parser.add_argument("--verbose", action="store_true", help="Print verbose output")
+parser.add_argument("--use-sdk", action="store_true", help="Use MCP SDK for communication (requires mcp package)")
+args = parser.parse_args()
 
-# Directory for communication files
-COMM_DIR = FUSION_MCP_COMM_DIR if FUSION_MCP_COMM_DIR.exists() else LOCAL_MCP_COMM_DIR
+# Set up paths for communication
+WORKSPACE_PATH = Path(__file__).parent
+COMM_DIR = WORKSPACE_PATH / "mcp_comm"
 COMM_DIR.mkdir(exist_ok=True)
 
-print(f"Using communication directory: {COMM_DIR}")
-
-def create_command_file(command, params=None):
-    """Create a command file that Fusion 360 can read."""
-    command_id = int(time.time())
-    command_file = COMM_DIR / f"command_{command_id}.json"
+class MCPClient:
+    """Client for interacting with the Fusion 360 MCP server."""
     
-    data = {
-        "command": command,
-        "params": params or {},
-        "timestamp": time.time(),
-        "id": command_id
-    }
+    def __init__(self, sse_url: str = "http://127.0.0.1:3000/sse", timeout: int = 10, use_sdk: bool = False):
+        self.sse_url = sse_url
+        self.timeout = timeout
+        self.use_sdk = use_sdk and mcp is not None
+        self.connected = False
+        self.session = None
     
-    with open(command_file, 'w') as f:
-        json.dump(data, f, indent=2)
-    
-    print(f"Created command file: {command_file}")
-    return command_id, command_file
-
-def wait_for_response(command_id, timeout=10):
-    """Wait for a response file from Fusion 360."""
-    response_file = COMM_DIR / f"response_{command_id}.json"
-    
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        if response_file.exists():
+    async def connect(self) -> bool:
+        """Connect to the MCP server."""
+        if self.use_sdk:
             try:
-                with open(response_file, 'r') as f:
-                    response = json.load(f)
-                print(f"Got response: {response}")
-                return response
-            except Exception as e:
-                print(f"Error reading response file: {e}")
-                return None
-        
-        time.sleep(0.1)
-    
-    print(f"Timeout waiting for response to command {command_id}")
-    return None
-
-def run_command(command, params=None, timeout=10):
-    """Run a command through file-based communication."""
-    command_id, command_file = create_command_file(command, params)
-    return wait_for_response(command_id, timeout)
-
-def test_resources():
-    """Test the resources provided by the server using file-based communication."""
-    print("\nTesting resources...")
-    
-    # List resources
-    resource_list = run_command("list_resources")
-    if resource_list and "resources" in resource_list:
-        print(f"Available resources: {resource_list['resources']}")
-        
-        # Test specific resources
-        for resource_name in ["active-document-info", "design-structure", "parameters"]:
-            print(f"Requesting resource: {resource_name}")
-            result = run_command("get_resource", {"resource_name": resource_name})
-            
-            if result and "success" in result and result["success"]:
-                print(f"✓ Resource '{resource_name}' available")
+                from mcp import ClientSession, HttpServerParameters
                 
-                # Print some details about the result
-                if "data" in result:
-                    data = result["data"]
-                    if isinstance(data, dict):
-                        if len(data) > 0:
-                            print(f"  Keys: {', '.join(list(data.keys())[:5])}{' ...' if len(data.keys()) > 5 else ''}")
-                        else:
-                            print("  (Empty dictionary returned)")
-                    elif isinstance(data, list):
-                        if len(data) > 0:
-                            print(f"  List with {len(data)} items")
-                        else:
-                            print("  (Empty list returned)")
-                    else:
-                        print(f"  Data: {str(data)[:100]}{' ...' if len(str(data)) > 100 else ''}")
-            else:
-                print(f"✗ Resource '{resource_name}' not available")
-    else:
-        print("Failed to list resources")
-
-def test_tools():
-    """Test the tools provided by the server using file-based communication."""
-    print("\nTesting tools...")
+                # Create server parameters for HTTP connection
+                server_params = HttpServerParameters(
+                    base_url=self.sse_url,
+                    timeout=self.timeout
+                )
+                
+                # Create a client session
+                self.session = ClientSession.create_http_session(server_params)
+                
+                # Initialize the connection
+                await self.session.initialize()
+                
+                self.connected = True
+                return True
+            except ImportError as e:
+                print(f"Error importing MCP client modules: {str(e)}")
+                print("Falling back to direct connection method")
+            except Exception as e:
+                print(f"Error connecting to MCP server using SDK: {str(e)}")
+                print("Falling back to direct connection method")
+        
+        # If SDK connection failed or was not requested, try direct HTTP connection
+        try:
+            with urllib.request.urlopen(self.sse_url, timeout=self.timeout) as response:
+                if response.getcode() == 200:
+                    self.connected = True
+                    return True
+        except Exception as e:
+            print(f"Error connecting to MCP server via HTTP: {str(e)}")
+        
+        return False
     
-    # List tools
-    tool_list = run_command("list_tools")
-    if tool_list and "tools" in tool_list:
-        print(f"Available tools: {tool_list['tools']}")
+    async def test_connection(self) -> Tuple[bool, str]:
+        """Test the connection to the server."""
+        print(f"Testing connection to server at {self.sse_url}...")
         
-        # Test message_box tool
-        print("Calling tool: message_box")
-        result = run_command("call_tool", {
-            "tool_name": "message_box",
-            "params": {"message": "Test message from MCP client at " + time.ctime()}
-        })
+        # Try multiple connection methods to be thorough
+        error_messages = []
         
-        if result and "success" in result and result["success"]:
-            print(f"✓ Tool 'message_box' called successfully")
-            if "result" in result:
-                print(f"  Result: {result['result']}")
-        else:
-            print(f"✗ Tool 'message_box' failed")
-        
-        # Test create_new_sketch tool
-        print("Calling tool: create_new_sketch")
-        result = run_command("call_tool", {
-            "tool_name": "create_new_sketch",
-            "params": {"plane_name": "XY"}
-        })
-        
-        if result and "success" in result and result["success"]:
-            print(f"✓ Tool 'create_new_sketch' called successfully")
-            if "result" in result:
-                print(f"  Result: {result['result']}")
-        else:
-            print(f"✗ Tool 'create_new_sketch' failed")
-        
-        # Test create_parameter tool
-        print("Calling tool: create_parameter")
-        result = run_command("call_tool", {
-            "tool_name": "create_parameter",
-            "params": {
-                "name": f"TestParam_{int(time.time()) % 10000}",
-                "expression": "10 mm",
-                "unit": "mm",
-                "comment": "Created by MCP client test"
-            }
-        })
-        
-        if result and "success" in result and result["success"]:
-            print(f"✓ Tool 'create_parameter' called successfully")
-            if "result" in result:
-                print(f"  Result: {result['result']}")
-        else:
-            print(f"✗ Tool 'create_parameter' failed")
-    else:
-        print("Failed to list tools")
-
-def test_prompts():
-    """Test the prompts provided by the server using file-based communication."""
-    print("\nTesting prompts...")
-    
-    # List prompts
-    prompt_list = run_command("list_prompts")
-    if prompt_list and "prompts" in prompt_list:
-        print(f"Available prompts: {prompt_list['prompts']}")
-        
-        # Test specific prompts
-        for prompt_name in ["create_sketch_prompt", "parameter_setup_prompt"]:
-            print(f"Requesting prompt: {prompt_name}")
-            result = run_command("get_prompt", {"prompt_name": prompt_name})
+        # Method 1: Direct HTTP HEAD request
+        try:
+            print("Trying direct HTTP head request...")
+            # First try to connect to the HTTP endpoint
+            http_url = self.sse_url.replace("/sse", "/")
+            req = urllib.request.Request(http_url, method="HEAD")
             
-            if result and "success" in result and result["success"]:
-                print(f"✓ Prompt '{prompt_name}' available")
-                if "content" in result:
-                    content = result["content"]
-                    prompt_lines = content.split('\n')
-                    preview = '\n'.join(prompt_lines[:min(3, len(prompt_lines))])
-                    print(f"  Content preview: {preview}...")
-            else:
-                print(f"✗ Prompt '{prompt_name}' not available")
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                print(f"HTTP connection successful. Status code: {response.getcode()}")
+                return True, f"Connected to server at {http_url}"
+        except Exception as e:
+            error_message = f"HTTP HEAD request failed: {str(e)}"
+            print(error_message)
+            error_messages.append(error_message)
+        
+        # Method 2: Direct HTTP GET request
+        try:
+            print("Trying direct HTTP GET request...")
+            http_url = self.sse_url.replace("/sse", "/")
+            req = urllib.request.Request(http_url, method="GET")
+            
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                print(f"HTTP GET request successful. Status code: {response.getcode()}")
+                content = response.read().decode('utf-8')
+                print(f"Response content: {content[:200]}...")  # Print first 200 chars
+                return True, f"Connected to server at {http_url}"
+        except Exception as e:
+            error_message = f"HTTP GET request failed: {str(e)}"
+            print(error_message)
+            error_messages.append(error_message)
+        
+        # Method 3: Direct SSE endpoint GET request
+        try:
+            print("Trying direct SSE endpoint request...")
+            req = urllib.request.Request(self.sse_url, method="GET")
+            
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                print(f"SSE endpoint request successful. Status code: {response.getcode()}")
+                # Don't read the content as it might block
+                return True, f"SSE endpoint available at {self.sse_url}"
+        except Exception as e:
+            error_message = f"SSE endpoint request failed: {str(e)}"
+            print(error_message)
+            error_messages.append(error_message)
+        
+        # Method 4: SDK connection if available
+        if self.use_sdk:
+            try:
+                print("Trying MCP SDK connection...")
+                success = await self.connect()
+                if success:
+                    return True, f"Connected to server at {self.sse_url} using MCP SDK"
+                error_message = "Failed to connect using MCP SDK"
+                print(error_message)
+                error_messages.append(error_message)
+            except Exception as e:
+                error_message = f"Error connecting using MCP SDK: {str(e)}"
+                print(error_message)
+                error_messages.append(error_message)
+        
+        # Method 5: File-based connection as a last resort
+        print("Trying file-based communication as a last resort...")
+        success, result = await self.test_file_connection()
+        if success:
+            return True, "Connected using file-based communication"
+        
+        # All methods failed
+        return False, "All connection methods failed. Errors:\n" + "\n".join(error_messages)
+    
+    async def test_file_connection(self) -> Tuple[bool, Any]:
+        """Test file-based communication with the server."""
+        # Create a test command file
+        command_id = int(time.time() * 1000)
+        command_file = COMM_DIR / f"command_{command_id}.json"
+        response_file = COMM_DIR / f"response_{command_id}.json"
+        
+        # Remove existing response file if it exists
+        if response_file.exists():
+            response_file.unlink()
+        
+        # Create command data
+        command_data = {
+            "command": "list_resources",
+            "params": {}
+        }
+        
+        # Write command file
+        with open(command_file, "w") as f:
+            json.dump(command_data, f, indent=2)
+        
+        print(f"Created test command file: {command_file}")
+        
+        # Wait for response
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            if response_file.exists():
+                try:
+                    with open(response_file, "r") as f:
+                        response = json.load(f)
+                    return True, response
+                except Exception as e:
+                    return False, f"Error reading response: {str(e)}"
+            await asyncio.sleep(0.1)
+        
+        return False, "Timeout waiting for response"
+    
+    async def list_resources(self) -> List[str]:
+        """Get a list of available resources from the server."""
+        if self.use_sdk and self.session:
+            try:
+                resources = await self.session.list_resources()
+                return resources
+            except Exception as e:
+                print(f"Error listing resources using SDK: {str(e)}")
+                print("Falling back to file-based method")
+        
+        # Use file-based communication
+        command_id = int(time.time() * 1000)
+        command_file = COMM_DIR / f"command_{command_id}.json"
+        response_file = COMM_DIR / f"response_{command_id}.json"
+        
+        # Create command data
+        command_data = {
+            "command": "list_resources",
+            "params": {}
+        }
+        
+        # Write command file
+        with open(command_file, "w") as f:
+            json.dump(command_data, f, indent=2)
+        
+        print(f"Created list_resources command file: {command_file}")
+        
+        # Wait for response
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            if response_file.exists():
+                with open(response_file, "r") as f:
+                    response = json.load(f)
+                return response.get("result", [])
+            await asyncio.sleep(0.1)
+        
+        return []
+    
+    async def list_tools(self) -> List[Dict[str, str]]:
+        """Get a list of available tools from the server."""
+        if self.use_sdk and self.session:
+            try:
+                tools = await self.session.list_tools()
+                return [{"name": tool, "description": ""} for tool in tools]
+            except Exception as e:
+                print(f"Error listing tools using SDK: {str(e)}")
+                print("Falling back to file-based method")
+        
+        # Use file-based communication
+        command_id = int(time.time() * 1000)
+        command_file = COMM_DIR / f"command_{command_id}.json"
+        response_file = COMM_DIR / f"response_{command_id}.json"
+        
+        # Create command data
+        command_data = {
+            "command": "list_tools",
+            "params": {}
+        }
+        
+        # Write command file
+        with open(command_file, "w") as f:
+            json.dump(command_data, f, indent=2)
+        
+        print(f"Created list_tools command file: {command_file}")
+        
+        # Wait for response
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            if response_file.exists():
+                with open(response_file, "r") as f:
+                    response = json.load(f)
+                return response.get("result", [])
+            await asyncio.sleep(0.1)
+        
+        return []
+    
+    async def list_prompts(self) -> List[Dict[str, str]]:
+        """Get a list of available prompts from the server."""
+        if self.use_sdk and self.session:
+            try:
+                prompts = await self.session.list_prompts()
+                return [{"name": prompt.name, "description": prompt.description} for prompt in prompts]
+            except Exception as e:
+                print(f"Error listing prompts using SDK: {str(e)}")
+                print("Falling back to file-based method")
+        
+        # Use file-based communication
+        command_id = int(time.time() * 1000)
+        command_file = COMM_DIR / f"command_{command_id}.json"
+        response_file = COMM_DIR / f"response_{command_id}.json"
+        
+        # Create command data
+        command_data = {
+            "command": "list_prompts",
+            "params": {}
+        }
+        
+        # Write command file
+        with open(command_file, "w") as f:
+            json.dump(command_data, f, indent=2)
+        
+        print(f"Created list_prompts command file: {command_file}")
+        
+        # Wait for response
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            if response_file.exists():
+                with open(response_file, "r") as f:
+                    response = json.load(f)
+                return response.get("result", [])
+            await asyncio.sleep(0.1)
+        
+        return []
+    
+    async def call_tool(self, tool_name: str, **params) -> Any:
+        """Call a tool on the server."""
+        if self.use_sdk and self.session:
+            try:
+                result = await self.session.call_tool(tool_name, arguments=params)
+                return result
+            except Exception as e:
+                print(f"Error calling tool using SDK: {str(e)}")
+                print("Falling back to file-based method")
+        
+        # Use file-based communication
+        command_id = int(time.time() * 1000)
+        command_file = COMM_DIR / f"command_{command_id}.json"
+        response_file = COMM_DIR / f"response_{command_id}.json"
+        
+        # Create command data
+        command_data = {
+            "command": tool_name,
+            "params": params
+        }
+        
+        # Write command file
+        with open(command_file, "w") as f:
+            json.dump(command_data, f, indent=2)
+        
+        print(f"Created {tool_name} command file: {command_file}")
+        
+        # Wait for response
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            if response_file.exists():
+                with open(response_file, "r") as f:
+                    response = json.load(f)
+                return response.get("result", None)
+            await asyncio.sleep(0.1)
+        
+        return None
+    
+    async def display_message(self, message: str) -> bool:
+        """Display a message box in Fusion 360."""
+        print(f"Displaying message: {message}")
+        
+        # First try using the tool
+        result = await self.call_tool("message_box", message=message)
+        if result:
+            return True
+        
+        # If tool call failed, try the message file method
+        message_file = COMM_DIR / "message_box.txt"
+        with open(message_file, "w") as f:
+            f.write(message)
+        
+        print(f"Created message file: {message_file}")
+        
+        # Wait to see if file gets processed
+        start_time = time.time()
+        while time.time() - start_time < self.timeout:
+            if not message_file.exists() or list(COMM_DIR.glob("processed_message_*.txt")):
+                return True
+            await asyncio.sleep(0.1)
+        
+        return False
+    
+    async def close(self):
+        """Close the connection to the server."""
+        if self.session:
+            await self.session.close()
+            self.session = None
+        self.connected = False
+
+async def run_tests(client: MCPClient, server_status=None):
+    """Run a series of tests against the MCP server."""
+    print("\n=== FUSION 360 MCP SERVER TESTS ===\n")
+    
+    # Test connection
+    print("Testing connection to MCP server...")
+    success, message = await client.test_connection()
+    if success:
+        print(f"✅ Connection successful: {message}")
     else:
-        print("Failed to list prompts")
+        print(f"❌ Connection failed: {message}")
+        return False
+    
+    # If we have server_status data, we can use it instead of making server calls
+    if server_status and server_status.get('status') == 'running':
+        print("\nUsing server status information from server_status.json file:")
+        
+        # Resources
+        resources = server_status.get('resources', [])
+        if resources:
+            print(f"\n✅ Found {len(resources)} resources:")
+            for resource in resources:
+                print(f"  - {resource}")
+        else:
+            print("\n❌ No resources found in server status")
+        
+        # Tools
+        tools = server_status.get('tools', [])
+        if tools:
+            print(f"\n✅ Found {len(tools)} tools:")
+            for tool in tools:
+                print(f"  - {tool['name']}: {tool.get('description', '')}")
+        else:
+            print("\n❌ No tools found in server status")
+        
+        # Prompts
+        prompts = server_status.get('prompts', [])
+        if prompts:
+            print(f"\n✅ Found {len(prompts)} prompts:")
+            for prompt in prompts:
+                print(f"  - {prompt['name']}: {prompt.get('description', '')}")
+        else:
+            print("\n❌ No prompts found in server status")
+    else:
+        # No server status or not running, so query server directly
+        
+        # Test listing resources
+        print("\nListing resources...")
+        resources = await client.list_resources()
+        if resources:
+            print(f"✅ Found {len(resources)} resources:")
+            for resource in resources:
+                print(f"  - {resource}")
+        else:
+            print("❌ No resources found or error occurred")
+        
+        # Test listing tools
+        print("\nListing tools...")
+        tools = await client.list_tools()
+        if tools:
+            print(f"✅ Found {len(tools)} tools:")
+            for tool in tools:
+                print(f"  - {tool['name']}: {tool.get('description', '')}")
+        else:
+            print("❌ No tools found or error occurred")
+        
+        # Test listing prompts
+        print("\nListing prompts...")
+        prompts = await client.list_prompts()
+        if prompts:
+            print(f"✅ Found {len(prompts)} prompts:")
+            for prompt in prompts:
+                print(f"  - {prompt['name']}: {prompt.get('description', '')}")
+        else:
+            print("❌ No prompts found or error occurred")
+    
+    # Test message box in either case
+    print("\nTesting message box...")
+    message_result = await client.display_message(f"MCP Test Message - {time.ctime()}")
+    if message_result:
+        print("✅ Message box displayed successfully")
+    else:
+        print("❌ Failed to display message box")
+    
+    return True
 
-def test_message_box():
-    """Test the message_box functionality by creating a file that Fusion 360 can detect."""
-    print("\nTesting message box functionality through file...")
+async def main():
+    """Main entry point."""
+    # First check for server status file which has the most detailed information
+    status_file = COMM_DIR / "server_status.json"
+    server_status = None
     
-    # Create a file with a message that Fusion 360 can read
-    message_file_path = COMM_DIR / "message_box.txt"
-    
-    try:
-        with open(message_file_path, "w") as f:
-            f.write(f"DISPLAY_MESSAGE: Test message from MCP client at {time.ctime()}")
+    if status_file.exists():
+        try:
+            with open(status_file, "r") as f:
+                server_status = json.load(f)
+            
+            print(f"Found server status file:")
+            print(f"  Status: {server_status.get('status', 'unknown')}")
+            print(f"  Last updated: {server_status.get('formatted_time', 'unknown')}")
+            print(f"  Server URL: {server_status.get('server_url', 'unknown')}")
+            
+            # If the server reports it's running, use its URL
+            if server_status.get('status') == 'running' and server_status.get('server_url'):
+                # Override the URL from command line if server has a different one
+                if args.url != server_status.get('server_url'):
+                    print(f"Updating URL from {args.url} to {server_status.get('server_url')}")
+                    args.url = server_status.get('server_url')
+        except Exception as e:
+            print(f"Error reading server status file: {str(e)}")
+    else:
+        print("No server status file found. Checking ready files...")
+        # Fall back to checking ready files
+        ready_paths = [
+            WORKSPACE_PATH / "mcp_server_ready.txt",
+            WORKSPACE_PATH / "mcp_comm" / "mcp_server_ready.txt",
+            Path(os.path.expanduser("~/Desktop/mcp_server_ready.txt")),
+            Path("C:/Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve/mcp_comm/mcp_server_ready.txt")
+        ]
         
-        print(f"Created message file at: {message_file_path}")
-        print("If the Fusion 360 add-in is monitoring this file, it should display a message box.")
-        
-        # Also try through the command system
-        run_command("message_box", {"message": f"Command file message at {time.ctime()}"})
-        
-    except Exception as e:
-        print(f"Error creating message file: {str(e)}")
-
-def check_server_ready(wait_time):
-    """Check if the server is ready by looking for the ready file."""
-    print(f"Waiting up to {wait_time} seconds for server to be ready...")
-    
-    # Get the current directory and parent directories
-    current_dir = Path(__file__).resolve().parent
-    parent_dir = current_dir.parent
-    
-    # Look for ready file in different common locations
-    potential_paths = [
-        # In the Fusion add-in directories
-        FUSION_ADDIN_PATH / "MCPserve" / "mcp_server_ready.txt",
-        FUSION_ADDIN_PATH / "mcp_server_ready.txt",
-        FUSION_MCP_COMM_DIR / "mcp_server_ready.txt",
-        
-        # In the same directory as this script
-        current_dir / "mcp_server_ready.txt",
-        # In the MCP Server Script directory
-        current_dir / "MCP Server Script" / "mcp_server_ready.txt",
-        # In the communication directory
-        COMM_DIR / "mcp_server_ready.txt",
-        LOCAL_MCP_COMM_DIR / "mcp_server_ready.txt",
-        # One level up from script directory
-        parent_dir / "mcp_server_ready.txt",
-        # User desktop
-        Path.home() / "Desktop" / "mcp_server_ready.txt",
-    ]
-    
-    # Print all paths we're checking
-    print("Checking for ready file in these locations:")
-    for path in potential_paths:
-        print(f"- {path}")
-    
-    start_time = time.time()
-    found = False
-    found_path = None
-    
-    while time.time() - start_time < wait_time:
-        for path in potential_paths:
+        ready_files = []
+        for path in ready_paths:
             if path.exists():
                 try:
-                    with open(path, 'r') as f:
-                        content = f.read().strip()
-                    print(f"Server is ready! Found indicator file: {path}")
-                    print(f"Content: {content}")
-                    found = True
-                    found_path = path
-                    break
+                    content = path.read_text().strip()
+                    ready_files.append((path, content))
                 except Exception as e:
-                    print(f"Error reading file {path}: {str(e)}")
+                    ready_files.append((path, f"Error reading: {str(e)}"))
         
-        if found:
-            break
-            
-        time.sleep(0.5)
+        if ready_files:
+            print(f"Found {len(ready_files)} ready file(s):")
+            for path, content in ready_files:
+                print(f"  - {path}: {content}")
+        else:
+            print("No server ready files found. The MCP Server may not be running.")
+            print("Please start the MCP Server command in Fusion 360 first.")
     
-    if not found:
-        print("WARNING: Server ready file not found. Server might not be running or ready.")
-        user_input = input("Continue anyway? (y/n): ")
-        if user_input.lower() != 'y':
-            sys.exit(1)
+    # Check for any error logs
+    error_file = COMM_DIR / "mcp_server_error.txt"
+    if error_file.exists():
+        try:
+            error_content = error_file.read_text().strip()
+            print("\n⚠️ Server error detected:")
+            print(f"{error_content[:500]}..." if len(error_content) > 500 else error_content)
+            print("\nThe server might not be functioning correctly.")
+        except Exception as e:
+            print(f"Error reading error file: {str(e)}")
     
-    return found_path
-
-def run_file_based_tests():
-    """Run tests using file-based communication."""
-    print("Running tests using file-based communication...")
+    # Create client and run tests
+    client = MCPClient(
+        sse_url=args.url,
+        timeout=args.timeout,
+        use_sdk=args.use_sdk
+    )
     
-    # Create the ready file to let the server know we're testing
-    ready_file = COMM_DIR / "client_ready.txt"
     try:
-        with open(ready_file, "w") as f:
-            f.write(f"Client ready for testing at {time.ctime()}")
-        print(f"Created client ready file: {ready_file}")
-    except Exception as e:
-        print(f"Error creating client ready file: {str(e)}")
-    
-    # Run the tests
-    try:
-        # Test resources
-        test_resources()
-        
-        # Test tools
-        test_tools()
-        
-        # Test prompts
-        test_prompts()
-        
-        # Test message box
-        test_message_box()
-        
-        print("\nAll tests completed!")
-    except Exception as e:
-        print(f"Error during tests: {str(e)}")
-        print(traceback.format_exc())
-
-def main():
-    """Main entry point for the client."""
-    parser = argparse.ArgumentParser(description='MCP Client for Fusion 360')
-    parser.add_argument('--wait', type=int, default=10, 
-                        help='Time to wait in seconds for server to be ready')
-    args = parser.parse_args()
-    
-    print("MCP Client for Fusion 360")
-    print("=========================")
-    
-    # Clear old command and response files
-    for file in COMM_DIR.glob("command_*.json"):
-        file.unlink()
-    for file in COMM_DIR.glob("response_*.json"):
-        file.unlink()
-    
-    # Wait for server to be ready
-    found_ready_file = check_server_ready(args.wait)
-    
-    # Run our tests using file-based communication
-    run_file_based_tests()
-    
-    print("\nTest completed.")
+        success = await run_tests(client, server_status)
+        if success:
+            print("\n✅ All tests completed.")
+        else:
+            print("\n❌ Some tests failed.")
+    finally:
+        await client.close()
 
 if __name__ == "__main__":
-    main() 
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nOperation canceled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1) 
