@@ -46,3 +46,26 @@ Queue now contains 1 messages
 Command-based display triggered
 Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745344286.txt
 File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 14:02:55 2025 ---
+Message content: MCP Test Message - Tue Apr 22 14:02:54 2025 [ID:test_msg_1745344974]
+Added message to pending_messages queue
+Queue now contains 1 messages
+Command-based display triggered
+Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745344975.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 14:19:18 2025 ---
+Message content: DISPLAY_MESSAGE: Test message from MCP client at Fri Apr  4 07:57:55 2025
+Added message to pending_messages queue
+Queue now contains 1 messages
+Command-based display triggered
+Renaming file to: C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\mcp_comm\processed_message_1745345958.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 14:20:00 2025 ---
+Message content: MCP Test Message - Tue Apr 22 14:20:00 2025 [ID:test_msg_1745346000]
+Message being processed via command approach
+Command-based display triggered
+Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745346000.txt
+File renamed successfully

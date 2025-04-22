@@ -1,9 +1,6 @@
 # Here you define the commands that will be added to your add-in.
 
 # Import the modules corresponding to the commands you created.
-from .commandDialog import entry as commandDialog
-from .paletteShow import entry as paletteShow
-from .paletteSend import entry as paletteSend
 from . import MCPServerCommand
 
 # Add your imported modules to this list.

@@ -18,7 +18,6 @@ app = adsk.core.Application.get()
 ui = app.userInterface
 server_thread = None
 server_running = False
-pending_messages = []  # Store messages that need to be displayed
 message_command_handlers = []  # Store command handlers to prevent garbage collection
 
 # Initialize the global handlers list
@@ -56,52 +55,6 @@ def run_mcp_server():
         from mcp.server.fastmcp import FastMCP
         import uvicorn
         import threading
-        
-        # Create a timer to regularly check and process pending messages
-        def start_message_check_timer():
-            # Log that we're starting the timer
-            try:
-                workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
-                workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
-                os.makedirs(workspace_comm_dir, exist_ok=True)
-                timer_debug_path = os.path.join(workspace_comm_dir, "timer_debug.txt")
-                
-                with open(timer_debug_path, "a") as f:
-                    f.write(f"Starting message check timer at {time.ctime()}\n")
-            except:
-                pass
-            
-            # Function to check messages from a timer
-            def check_messages():
-                try:
-                    # Process any pending messages if we have any
-                    if pending_messages:
-                        with open(timer_debug_path, "a") as f:
-                            f.write(f"Timer check found {len(pending_messages)} pending messages at {time.ctime()}\n")
-                        
-                        process_pending_messages()
-                    
-                    # Keep the timer running if the server is running
-                    if server_running:
-                        # Create a new timer for the next check
-                        message_timer = threading.Timer(1.0, check_messages)
-                        message_timer.daemon = True
-                        message_timer.start()
-                except Exception as e:
-                    # Log any errors
-                    try:
-                        with open(timer_debug_path, "a") as f:
-                            f.write(f"Timer check error: {str(e)} at {time.ctime()}\n")
-                    except:
-                        pass
-            
-            # Start the timer
-            message_timer = threading.Timer(1.0, check_messages)
-            message_timer.daemon = True
-            message_timer.start()
-        
-        # Start the timer to check for messages
-        start_message_check_timer()
         
         # Also, directly test showing a message box when the server starts
         def test_direct_message():
@@ -572,12 +525,10 @@ Suggest appropriate parameters, their values, units, and purposes based on the u
                                     
                                     # Queue the message for display
                                     print(f"Displaying message box: {message}")
-                                    pending_messages.append(message)
                                     
                                     # Log that we queued the message
                                     with open(debug_file, "a") as f:
-                                        f.write(f"Added message to pending_messages queue\n")
-                                        f.write(f"Queue now contains {len(pending_messages)} messages\n")
+                                        f.write(f"Message being processed via command approach\n")
                                     
                                     # Try to display the message directly as well
                                     try:
@@ -897,9 +848,6 @@ def start_server():
     # Reset server state
     server_running = True
     
-    # Start the message processing timer
-    start_message_processing_timer()
-    
     # Start server in a separate thread
     def server_thread_func():
         try:
@@ -968,9 +916,6 @@ class MCPServerCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 'Current server status: ' + ('Running' if server_running else 'Not Running'), 
                 4, True)
             
-            # Process any pending messages
-            process_pending_messages()
-            
             # Events
             onExecute = MCPServerCommandExecuteHandler()
             cmd.execute.add(onExecute)
@@ -991,9 +936,6 @@ class MCPServerCommandExecuteHandler(adsk.core.CommandEventHandler):
         try:
             # Start the server
             success = start_server()
-            
-            # Process any pending messages
-            process_pending_messages()
             
             # Try to show a test message directly for debugging
             debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/execute_debug.txt"
@@ -1147,161 +1089,6 @@ def run(context):
         if ui:
             ui.messageBox('Failed to run:\n{}'.format(traceback.format_exc()))
 
-# Function to safely display a message box from any thread
-def safe_message_box(message, title="MCP Server Message"):
-    """Thread-safe way to display a message box in Fusion 360."""
-    with message_queue_lock:
-        message_queue.append((message, title))
-    
-    # Log the message in a file for debugging
-    try:
-        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
-        workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
-        os.makedirs(workspace_comm_dir, exist_ok=True)
-        
-        debug_file = os.path.join(workspace_comm_dir, "message_queue_debug.txt")
-        with open(debug_file, "a") as f:
-            f.write(f"Message added to queue at {time.ctime()}: {message}\n")
-    except:
-        pass
-
-# Function to process the message queue in the main UI thread
-def process_message_queue():
-    """Process any pending messages in the queue."""
-    if not message_queue:
-        return
-    
-    # Take one message from the queue
-    with message_queue_lock:
-        if message_queue:
-            message, title = message_queue.pop(0)
-        else:
-            return
-    
-    # Log that we're processing the message
-    try:
-        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
-        workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
-        debug_file = os.path.join(workspace_comm_dir, "message_queue_debug.txt")
-        with open(debug_file, "a") as f:
-            f.write(f"Displaying message at {time.ctime()}: {message}\n")
-    except:
-        pass
-    
-    # Display the message in the UI thread
-    try:
-        ui.messageBox(message, title)
-    except Exception as e:
-        try:
-            with open(debug_file, "a") as f:
-                f.write(f"Error displaying message: {str(e)}\n")
-        except:
-            pass
-
-# Create a timer event to process messages
-class MessageProcessingTimerHandler(adsk.core.CustomEventHandler):
-    def __init__(self):
-        super().__init__()
-    
-    def notify(self, args):
-        try:
-            # Process any pending messages
-            process_message_queue()
-            
-            # Schedule the next execution
-            if server_running:
-                app = adsk.core.Application.get()
-                message_event_id = 'MCPMessageProcessingEvent'
-                app.scheduleCustomEvent(message_event_id, 0.5)  # Fire every 0.5 seconds
-        except:
-            pass
-
-# Function to start the message processing timer
-def start_message_processing_timer():
-    try:
-        app = adsk.core.Application.get()
-        message_event_id = 'MCPMessageProcessingEvent'
-        
-        # Register event if not already registered
-        try:
-            message_event = app.registerCustomEvent(message_event_id)
-            message_event_handler = MessageProcessingTimerHandler()
-            message_event.add(message_event_handler)
-            handlers.append(message_event_handler)
-        except:
-            # Event might already be registered
-            pass
-        
-        # Schedule the first execution
-        app.scheduleCustomEvent(message_event_id, 0.1)
-        
-        # Log that we started the timer
-        try:
-            workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
-            workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
-            os.makedirs(workspace_comm_dir, exist_ok=True)
-            
-            debug_file = os.path.join(workspace_comm_dir, "message_queue_debug.txt")
-            with open(debug_file, "a") as f:
-                f.write(f"Message processing timer started at {time.ctime()}\n")
-        except:
-            pass
-    except Exception as e:
-        print(f"Error starting message processing timer: {str(e)}") 
-
-# Add a Command Handler for showing message boxes
-class MessageBoxCommandExecuteHandler(adsk.core.CommandEventHandler):
-    def __init__(self, message):
-        super().__init__()
-        self.message = message
-    
-    def notify(self, args):
-        try:
-            # Display the message
-            debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
-            with open(debug_file, "a") as f:
-                f.write(f"MessageBoxCommand executing for: {self.message} at {time.ctime()}\n")
-            
-            # Show the message box in the UI thread
-            ui.messageBox(self.message, "Fusion MCP Message")
-            
-            with open(debug_file, "a") as f:
-                f.write(f"Message box displayed successfully at {time.ctime()}\n")
-        except Exception as e:
-            with open(debug_file, "a") as f:
-                f.write(f"Error in command handler: {str(e)} at {time.ctime()}\n")
-                f.write(traceback.format_exc())
-
-class MessageBoxCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
-    def __init__(self, message):
-        super().__init__()
-        self.message = message
-    
-    def notify(self, args):
-        try:
-            debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
-            with open(debug_file, "a") as f:
-                f.write(f"MessageBoxCommand created for: {self.message} at {time.ctime()}\n")
-            
-            # Get the command
-            cmd = args.command
-            
-            # Connect to the execute event
-            onExecute = MessageBoxCommandExecuteHandler(self.message)
-            cmd.execute.add(onExecute)
-            message_command_handlers.append(onExecute)
-            
-            # Set command properties
-            cmd.isEnabled = True
-            cmd.isVisible = False
-            
-            with open(debug_file, "a") as f:
-                f.write(f"Command handlers set up at {time.ctime()}\n")
-        except Exception as e:
-            with open(debug_file, "a") as f:
-                f.write(f"Error in command created handler: {str(e)} at {time.ctime()}\n")
-                f.write(traceback.format_exc())
-
 # Function to create a message box command
 def create_message_box_command(message):
     try:
@@ -1371,42 +1158,57 @@ def show_message_box(message):
         # Log failure
         with open(debug_path, "a") as f:
             f.write(f"Error showing message box: {str(e)} at {time.ctime()}\n")
-        
-        # Add to pending messages to try again
-        pending_messages.append(message)
         return False
 
-# Add a function to process pending messages in the main thread
-def process_pending_messages():
-    """Process any pending messages in the main thread."""
-    global pending_messages
+# Add a Command Handler for showing message boxes
+class MessageBoxCommandExecuteHandler(adsk.core.CommandEventHandler):
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
     
-    if not pending_messages:
-        return
-    
-    # Log that we're trying to process messages
-    debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/pending_message_debug.txt"
-    with open(debug_path, "a") as f:
-        f.write(f"Processing {len(pending_messages)} pending messages at {time.ctime()}\n")
-    
-    # Try to process one message at a time to avoid blocking
-    if pending_messages:
-        message = pending_messages[0]  # Get the first message but don't remove yet
-        
-        # Log that we're trying again
-        with open(debug_path, "a") as f:
-            f.write(f"Processing pending message: {message} at {time.ctime()}\n")
-        
-        # Try to show the message
+    def notify(self, args):
         try:
-            ui.messageBox(message)
-            with open(debug_path, "a") as f:
-                f.write(f"Successfully displayed pending message at {time.ctime()}\n")
+            # Display the message
+            debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
+            with open(debug_file, "a") as f:
+                f.write(f"MessageBoxCommand executing for: {self.message} at {time.ctime()}\n")
             
-            # Remove the message since it was displayed
-            pending_messages.pop(0)
+            # Show the message box in the UI thread
+            ui.messageBox(self.message, "Fusion MCP Message")
+            
+            with open(debug_file, "a") as f:
+                f.write(f"Message box displayed successfully at {time.ctime()}\n")
         except Exception as e:
-            with open(debug_path, "a") as f:
-                f.write(f"Error displaying pending message: {str(e)} at {time.ctime()}\n")
+            with open(debug_file, "a") as f:
+                f.write(f"Error in command handler: {str(e)} at {time.ctime()}\n")
+                f.write(traceback.format_exc())
+
+class MessageBoxCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+    
+    def notify(self, args):
+        try:
+            debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
+            with open(debug_file, "a") as f:
+                f.write(f"MessageBoxCommand created for: {self.message} at {time.ctime()}\n")
             
-            # Keep the message in the queue for now 
+            # Get the command
+            cmd = args.command
+            
+            # Connect to the execute event
+            onExecute = MessageBoxCommandExecuteHandler(self.message)
+            cmd.execute.add(onExecute)
+            message_command_handlers.append(onExecute)
+            
+            # Set command properties
+            cmd.isEnabled = True
+            cmd.isVisible = False
+            
+            with open(debug_file, "a") as f:
+                f.write(f"Command handlers set up at {time.ctime()}\n")
+        except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"Error in command created handler: {str(e)} at {time.ctime()}\n")
+                f.write(traceback.format_exc()) 
