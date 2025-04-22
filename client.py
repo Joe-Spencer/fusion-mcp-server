@@ -43,6 +43,16 @@ parser.add_argument("--list-resources", action="store_true", help="List availabl
 parser.add_argument("--list-tools", action="store_true", help="List available tools")
 parser.add_argument("--list-prompts", action="store_true", help="List available prompts")
 parser.add_argument("--wait-ready", action="store_true", help="Wait for the server to be ready before running tests")
+parser.add_argument("--test-resource", type=str, help="Test a specific resource by URI (e.g., fusion://active-document-info)")
+parser.add_argument("--test-sketch", action="store_true", help="Test the create_new_sketch tool")
+parser.add_argument("--plane", type=str, default="XY", help="Plane to use for sketch creation test (default: XY)")
+parser.add_argument("--test-parameter", action="store_true", help="Test the create_parameter tool")
+parser.add_argument("--param-name", type=str, help="Name for the test parameter")
+parser.add_argument("--param-expression", type=str, default="10", help="Expression for the test parameter (default: 10)")
+parser.add_argument("--param-unit", type=str, default="mm", help="Unit for the test parameter (default: mm)")
+parser.add_argument("--test-prompt", type=str, help="Test a specific prompt by name (e.g., create_sketch_prompt)")
+parser.add_argument("--prompt-args", type=str, help="JSON string of arguments for the prompt test")
+parser.add_argument("--test-all", action="store_true", help="Run all available tests")
 args = parser.parse_args()
 
 # Set up paths for communication
@@ -472,6 +482,253 @@ class MCPClient:
             print(f"❌ {error_message}")
             return False, error_message
     
+    async def test_resource(self, resource_uri: str) -> Tuple[bool, str, Any]:
+        """Test reading a specific resource from the server.
+        
+        Args:
+            resource_uri: The URI of the resource to read
+            
+        Returns:
+            Tuple of (success, message, content)
+        """
+        print(f"Testing resource: {resource_uri}")
+        
+        try:
+            # Try to read the resource using file-based communication
+            command_id = int(time.time() * 1000)
+            command_file = COMM_DIR / f"command_{command_id}.json"
+            response_file = COMM_DIR / f"response_{command_id}.json"
+            
+            # Create command data
+            command_data = {
+                "command": "read_resource",
+                "params": {
+                    "uri": resource_uri
+                }
+            }
+            
+            # Write command file
+            with open(command_file, "w") as f:
+                json.dump(command_data, f, indent=2)
+            
+            print(f"Created read_resource command file for {resource_uri}")
+            
+            # Wait for response
+            start_time = time.time()
+            while time.time() - start_time < self.timeout:
+                if response_file.exists():
+                    try:
+                        with open(response_file, "r") as f:
+                            response = json.load(f)
+                        
+                        # Check if there's an error
+                        if "error" in response:
+                            return False, f"Error reading resource: {response['error']}", None
+                        
+                        result = response.get("result", None)
+                        if result is not None:
+                            return True, f"Successfully read resource: {resource_uri}", result
+                        else:
+                            return False, "No result in response", None
+                    except Exception as e:
+                        return False, f"Error parsing response: {str(e)}", None
+                await asyncio.sleep(0.1)
+            
+            return False, f"Timeout waiting for response when reading {resource_uri}", None
+        except Exception as e:
+            error_message = f"Error testing resource {resource_uri}: {str(e)}"
+            print(f"❌ {error_message}")
+            return False, error_message, None
+    
+    async def test_create_sketch_tool(self, plane_name: str = "XY") -> Tuple[bool, str]:
+        """Test the create_new_sketch tool with the given plane.
+        
+        Args:
+            plane_name: The name of the plane to create the sketch on (default: "XY")
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        print(f"Testing create_new_sketch tool with plane: {plane_name}")
+        
+        try:
+            # Use file-based communication
+            command_id = int(time.time() * 1000)
+            command_file = COMM_DIR / f"command_{command_id}.json"
+            response_file = COMM_DIR / f"response_{command_id}.json"
+            
+            # Create command data
+            command_data = {
+                "command": "create_new_sketch",
+                "params": {
+                    "plane_name": plane_name
+                }
+            }
+            
+            # Write command file
+            with open(command_file, "w") as f:
+                json.dump(command_data, f, indent=2)
+            
+            print(f"Created create_new_sketch command file with plane: {plane_name}")
+            
+            # Wait for response
+            start_time = time.time()
+            while time.time() - start_time < self.timeout:
+                if response_file.exists():
+                    try:
+                        with open(response_file, "r") as f:
+                            response = json.load(f)
+                        
+                        # Check if there's an error
+                        if "error" in response:
+                            return False, f"Error creating sketch: {response['error']}"
+                        
+                        result = response.get("result", "")
+                        if "successfully" in result.lower():
+                            return True, result
+                        else:
+                            return False, f"Unexpected result: {result}"
+                    except Exception as e:
+                        return False, f"Error parsing response: {str(e)}"
+                await asyncio.sleep(0.1)
+            
+            return False, f"Timeout waiting for response when creating sketch on {plane_name}"
+        except Exception as e:
+            error_message = f"Error testing create_new_sketch tool: {str(e)}"
+            print(f"❌ {error_message}")
+            return False, error_message
+
+    async def test_create_parameter_tool(self, name: str = None, expression: str = "10", unit: str = "mm", comment: str = "Test parameter") -> Tuple[bool, str]:
+        """Test the create_parameter tool with the given parameters.
+        
+        Args:
+            name: The name of the parameter (default: auto-generated)
+            expression: The parameter expression (default: "10")
+            unit: The parameter unit (default: "mm")
+            comment: The parameter comment (default: "Test parameter")
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        if name is None:
+            name = f"TestParam_{int(time.time()) % 10000}"
+        
+        print(f"Testing create_parameter tool with name: {name}, expression: {expression}, unit: {unit}")
+        
+        try:
+            # Use file-based communication
+            command_id = int(time.time() * 1000)
+            command_file = COMM_DIR / f"command_{command_id}.json"
+            response_file = COMM_DIR / f"response_{command_id}.json"
+            
+            # Create command data
+            command_data = {
+                "command": "create_parameter",
+                "params": {
+                    "name": name,
+                    "expression": expression,
+                    "unit": unit,
+                    "comment": comment
+                }
+            }
+            
+            # Write command file
+            with open(command_file, "w") as f:
+                json.dump(command_data, f, indent=2)
+            
+            print(f"Created create_parameter command file for {name}")
+            
+            # Wait for response
+            start_time = time.time()
+            while time.time() - start_time < self.timeout:
+                if response_file.exists():
+                    try:
+                        with open(response_file, "r") as f:
+                            response = json.load(f)
+                        
+                        # Check if there's an error
+                        if "error" in response:
+                            return False, f"Error creating parameter: {response['error']}"
+                        
+                        result = response.get("result", "")
+                        if "successfully" in result.lower() or "created" in result.lower():
+                            return True, result
+                        else:
+                            return False, f"Unexpected result: {result}"
+                    except Exception as e:
+                        return False, f"Error parsing response: {str(e)}"
+                await asyncio.sleep(0.1)
+            
+            return False, f"Timeout waiting for response when creating parameter {name}"
+        except Exception as e:
+            error_message = f"Error testing create_parameter tool: {str(e)}"
+            print(f"❌ {error_message}")
+            return False, error_message
+
+    async def test_prompt(self, prompt_name: str, **prompt_args) -> Tuple[bool, str, Any]:
+        """Test retrieving a prompt from the server.
+        
+        Args:
+            prompt_name: The name of the prompt to retrieve
+            **prompt_args: Arguments for the prompt
+            
+        Returns:
+            Tuple of (success, message, content)
+        """
+        print(f"Testing prompt: {prompt_name} with args: {prompt_args}")
+        
+        try:
+            # Try to get the prompt using file-based communication
+            command_id = int(time.time() * 1000)
+            command_file = COMM_DIR / f"command_{command_id}.json"
+            response_file = COMM_DIR / f"response_{command_id}.json"
+            
+            # Create command data
+            command_data = {
+                "command": "get_prompt",
+                "params": {
+                    "name": prompt_name,
+                    "args": prompt_args
+                }
+            }
+            
+            # Write command file
+            with open(command_file, "w") as f:
+                json.dump(command_data, f, indent=2)
+            
+            print(f"Created get_prompt command file for {prompt_name}")
+            
+            # Wait for response
+            start_time = time.time()
+            while time.time() - start_time < self.timeout:
+                if response_file.exists():
+                    try:
+                        with open(response_file, "r") as f:
+                            response = json.load(f)
+                        
+                        # Check if there's an error
+                        if "error" in response:
+                            return False, f"Error getting prompt: {response['error']}", None
+                        
+                        result = response.get("result", None)
+                        if result is not None:
+                            # Check if the result has the expected structure
+                            if isinstance(result, dict) and "messages" in result:
+                                return True, f"Successfully retrieved prompt: {prompt_name}", result
+                            else:
+                                return False, f"Invalid prompt format: {result}", result
+                        else:
+                            return False, "No result in response", None
+                    except Exception as e:
+                        return False, f"Error parsing response: {str(e)}", None
+                await asyncio.sleep(0.1)
+            
+            return False, f"Timeout waiting for response when getting prompt {prompt_name}", None
+        except Exception as e:
+            error_message = f"Error testing prompt {prompt_name}: {str(e)}"
+            print(f"❌ {error_message}")
+            return False, error_message, None
+    
     async def close(self):
         """Close the connection to the server."""
         if self.session:
@@ -569,19 +826,37 @@ async def main():
     """Main function."""
     print("\n=== FUSION 360 MCP SERVER TESTS ===\n")
     
+    # Track test results
+    test_results = {}
+    
     # Check for server status file
     status_file = COMM_DIR / "server_status.json"
+    server_status = None
     if status_file.exists():
         try:
             with open(status_file, "r") as f:
-                status = json.load(f)
+                server_status = json.load(f)
                 print("Found server status file:")
-                print(f"  Status: {status.get('status', 'unknown')}")
-                print(f"  Last updated: {status.get('started_at', 'unknown')}")
-                print(f"  Server URL: {status.get('server_url', 'unknown')}")
+                print(f"  Status: {server_status.get('status', 'unknown')}")
+                print(f"  Last updated: {server_status.get('started_at', 'unknown')}")
+                print(f"  Server URL: {server_status.get('server_url', 'unknown')}")
                 print()
         except Exception as e:
             print(f"Error reading server status file: {str(e)}")
+    
+    # Add a direct message box test for debugging
+    # Create a message_box.txt file directly
+    try:
+        test_message = "DIRECT TEST MESSAGE from client.py - " + time.ctime()
+        message_file = COMM_DIR / "message_box.txt"
+        with open(message_file, "w") as f:
+            f.write(test_message)
+        print(f"Created direct test message file: {message_file}")
+        print(f"Test message: {test_message}")
+        print("If this message appears in Fusion 360, the direct message mechanism is working.")
+        print()
+    except Exception as e:
+        print(f"Error creating direct test message: {str(e)}")
     
     # Check for error files
     error_file = COMM_DIR / "mcp_server_error.txt"
@@ -629,70 +904,118 @@ async def main():
         else:
             print("❌ Timeout waiting for server ready file")
     
-    # Run selected tests
-    any_test_selected = False
+    # Determine if specific tests were requested
+    specific_tests = args.test_connection or args.test_message_box or args.list_resources or \
+                     args.list_tools or args.list_prompts or args.test_resource or \
+                     args.test_sketch or args.test_parameter or args.test_prompt or args.test_all
     
-    # Test connection if requested or if no specific test is selected
-    if args.test_connection or not any([
-        args.test_message_box, args.list_resources, 
-        args.list_tools, args.list_prompts
-    ]):
-        any_test_selected = True
-        print("\nTesting connection to MCP server...")
+    # Test connection if requested or if running all tests
+    if args.test_connection or args.test_all or not specific_tests:
+        print("\n=== CONNECTION TEST ===")
         success, message = await client.test_connection()
         if success:
             print(f"✅ Connection successful: {message}")
+            test_results["connection"] = True
         else:
             print(f"❌ Connection failed: {message}")
+            test_results["connection"] = False
     
-    # Check server status
-    if status_file.exists():
-        try:
-            with open(status_file, "r") as f:
-                status = json.load(f)
-                print("\nUsing server status information from server_status.json file:\n")
-                
-                # List resources if requested
-                if args.list_resources or not any_test_selected:
-                    any_test_selected = True
-                    resources = status.get("available_resources", [])
-                    if resources:
-                        print(f"Available resources:")
-                        for resource in resources:
-                            print(f"  - {resource}")
-                        print()
-                    else:
-                        print("❌ No resources found in server status\n")
-                
-                # List tools if requested
-                if args.list_tools or not any_test_selected:
-                    any_test_selected = True
-                    tools = status.get("available_tools", [])
-                    if tools:
-                        print(f"Available tools:")
-                        for tool in tools:
-                            print(f"  - {tool}")
-                        print()
-                    else:
-                        print("❌ No tools found in server status\n")
-                
-                # List prompts if requested
-                if args.list_prompts or not any_test_selected:
-                    any_test_selected = True
-                    prompts = status.get("available_prompts", [])
-                    if prompts:
-                        print(f"Available prompts:")
-                        for prompt in prompts:
-                            print(f"  - {prompt}")
-                        print()
-                    else:
-                        print("❌ No prompts found in server status\n")
-        except Exception as e:
-            print(f"Error reading status file: {str(e)}")
+    # Get available resources, tools, and prompts from status file
+    available_resources = []
+    available_tools = []
+    available_prompts = []
     
-    # Test message box if requested or if no specific test is selected
-    if args.test_message_box or not any_test_selected:
-        any_test_selected = True
+    if server_status:
+        available_resources = server_status.get("available_resources", [])
+        available_tools = server_status.get("available_tools", [])
+        available_prompts = server_status.get("available_prompts", [])
+    
+    # List resources if requested
+    if args.list_resources or args.test_all or not specific_tests:
+        print("\n=== AVAILABLE RESOURCES ===")
+        if available_resources:
+            for resource in available_resources:
+                print(f"  - {resource}")
+        else:
+            # Try to get from server
+            resources = await client.list_resources()
+            if resources:
+                for resource in resources:
+                    print(f"  - {resource}")
+                # Update available resources
+                available_resources = resources
+            else:
+                print("❌ No resources found")
+        print()
+    
+    # List tools if requested
+    if args.list_tools or args.test_all or not specific_tests:
+        print("\n=== AVAILABLE TOOLS ===")
+        if available_tools:
+            for tool in available_tools:
+                print(f"  - {tool}")
+        else:
+            # Try to get from server
+            tools = await client.list_tools()
+            if tools:
+                for tool in tools:
+                    if isinstance(tool, dict):
+                        print(f"  - {tool.get('name')}: {tool.get('description', '')}")
+                    else:
+                        print(f"  - {tool}")
+                # Update available tools
+                available_tools = [t.get('name') if isinstance(t, dict) else t for t in tools]
+            else:
+                print("❌ No tools found")
+        print()
+    
+    # List prompts if requested
+    if args.list_prompts or args.test_all or not specific_tests:
+        print("\n=== AVAILABLE PROMPTS ===")
+        if available_prompts:
+            for prompt in available_prompts:
+                print(f"  - {prompt}")
+        else:
+            # Try to get from server
+            prompts = await client.list_prompts()
+            if prompts:
+                for prompt in prompts:
+                    if isinstance(prompt, dict):
+                        print(f"  - {prompt.get('name')}: {prompt.get('description', '')}")
+                    else:
+                        print(f"  - {prompt}")
+                # Update available prompts
+                available_prompts = [p.get('name') if isinstance(p, dict) else p for p in prompts]
+            else:
+                print("❌ No prompts found")
+        print()
+    
+    # Test specific resource if requested or all resources if test_all
+    if args.test_resource or args.test_all:
+        resources_to_test = []
+        if args.test_resource:
+            resources_to_test = [args.test_resource]
+        elif args.test_all and available_resources:
+            resources_to_test = available_resources
+        
+        if resources_to_test:
+            print("\n=== RESOURCE TESTS ===")
+            resource_results = {}
+            for resource_uri in resources_to_test:
+                success, message, content = await client.test_resource(resource_uri)
+                resource_results[resource_uri] = success
+                if success:
+                    print(f"✅ Resource {resource_uri}: {message}")
+                    if args.verbose:
+                        print("Content:")
+                        print(json.dumps(content, indent=2, ensure_ascii=False)[:500] + "..." if len(json.dumps(content)) > 500 else json.dumps(content, indent=2, ensure_ascii=False))
+                else:
+                    print(f"❌ Resource {resource_uri}: {message}")
+            test_results["resources"] = resource_results
+            print()
+    
+    # Test message box if requested or if running all tests
+    if args.test_message_box or args.test_all or not specific_tests:
         print("\n=== MESSAGE BOX TEST ===")
         print("⚠️ NOTE: Even if this test reports success, please verify that you actually see")
         print("a message box pop up in Fusion 360. This test can give false positives if the")
@@ -700,6 +1023,7 @@ async def main():
         
         message = args.message if args.message else None
         success, result = await client.test_message_box(message)
+        test_results["message_box"] = success
         if success:
             print(f"✅ Message box test appears successful: {result}")
             print("\n⚠️ IMPORTANT: Did you actually see a message box in Fusion 360?")
@@ -707,12 +1031,119 @@ async def main():
         else:
             print(f"❌ Message box test failed: {result}")
             print("\nCheck that Fusion 360 is running and the MCP Server add-in is active.")
-            print("You can manually restart the MCP Server from the Add-Ins panel in Fusion 360.")
+        print()
+    
+    # Test sketch creation if requested or if running all tests
+    if args.test_sketch or args.test_all:
+        print("\n=== CREATE SKETCH TEST ===")
+        print("⚠️ NOTE: This test can fail if you don't have a design document open in Fusion 360.")
+        print("Please make sure you have an active design document open before running this test.\n")
+        
+        plane = args.plane
+        success, result = await client.test_create_sketch_tool(plane)
+        test_results["create_sketch"] = success
+        if success:
+            print(f"✅ Create sketch test successful: {result}")
+            print("\nPlease check that a new sketch was actually created in Fusion 360.")
+        else:
+            print(f"❌ Create sketch test failed: {result}")
+            if "no active document" in result.lower() or "not a design document" in result.lower():
+                print("\nCommon issues:")
+                print("1. You need to have Fusion 360 running with a design document open.")
+                print("2. The active document must be a design document, not a drawing or CAM document.")
+                print("3. Make sure the MCP server add-in is running.")
+        print()
+    
+    # Test parameter creation if requested or if running all tests
+    if args.test_parameter or args.test_all:
+        print("\n=== CREATE PARAMETER TEST ===")
+        print("⚠️ NOTE: This test can fail if you don't have a design document open in Fusion 360.")
+        print("Please make sure you have an active design document open before running this test.\n")
+        
+        name = args.param_name
+        expression = args.param_expression
+        unit = args.param_unit
+        success, result = await client.test_create_parameter_tool(name, expression, unit)
+        test_results["create_parameter"] = success
+        if success:
+            print(f"✅ Create parameter test successful: {result}")
+            print("\nPlease check that a new parameter was actually created in Fusion 360.")
+        else:
+            print(f"❌ Create parameter test failed: {result}")
+            if "no active document" in result.lower() or "not a design document" in result.lower():
+                print("\nCommon issues:")
+                print("1. You need to have Fusion 360 running with a design document open.")
+                print("2. The active document must be a design document, not a drawing or CAM document.")
+                print("3. Make sure the MCP server add-in is running.")
+            elif "parameter exists" in result.lower():
+                print("\nA parameter with this name already exists. Try using a different name.")
+        print()
+    
+    # Test specific prompt if requested or all prompts if test_all
+    if args.test_prompt or args.test_all:
+        prompts_to_test = []
+        if args.test_prompt:
+            prompts_to_test = [args.test_prompt]
+        elif args.test_all and available_prompts:
+            prompts_to_test = available_prompts
+        
+        if prompts_to_test:
+            print("\n=== PROMPT TESTS ===")
+            prompt_results = {}
+            prompt_args = {}
+            if args.prompt_args:
+                try:
+                    prompt_args = json.loads(args.prompt_args)
+                except json.JSONDecodeError:
+                    print(f"⚠️ Error parsing prompt args JSON: {args.prompt_args}")
+                    prompt_args = {"description": "Test prompt"}
+            else:
+                # Default arguments for common prompts
+                prompt_args = {"description": "Test prompt"}
+            
+            for prompt_name in prompts_to_test:
+                success, message, content = await client.test_prompt(prompt_name, **prompt_args)
+                prompt_results[prompt_name] = success
+                if success:
+                    print(f"✅ Prompt {prompt_name}: {message}")
+                    if args.verbose:
+                        print("Content:")
+                        print(json.dumps(content, indent=2, ensure_ascii=False)[:500] + "..." if len(json.dumps(content)) > 500 else json.dumps(content, indent=2, ensure_ascii=False))
+                else:
+                    print(f"❌ Prompt {prompt_name}: {message}")
+            test_results["prompts"] = prompt_results
+            print()
     
     # Close the client
     await client.close()
     
-    print("\n✅ All tests completed.")
+    # Print test summary
+    print("\n=== TEST SUMMARY ===")
+    all_passed = True
+    
+    for test_name, result in test_results.items():
+        if isinstance(result, dict):
+            # For grouped tests like resources and prompts
+            group_passed = all(result.values())
+            all_passed = all_passed and group_passed
+            if group_passed:
+                print(f"✅ {test_name.capitalize()}: All passed")
+            else:
+                # Show which specific items failed
+                print(f"❌ {test_name.capitalize()}: Some failed")
+                for item, passed in result.items():
+                    print(f"   {'✅' if passed else '❌'} {item}")
+        else:
+            # For simple tests
+            all_passed = all_passed and result
+            print(f"{'✅' if result else '❌'} {test_name.capitalize()}")
+    
+    if all_passed:
+        print("\n✅ All tests passed! The MCP server is working correctly.")
+    else:
+        print("\n❌ Some tests failed. See details above for troubleshooting.")
+    
+    print("\nTests completed.")
 
 if __name__ == "__main__":
     asyncio.run(main()) 

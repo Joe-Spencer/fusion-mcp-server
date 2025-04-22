@@ -1,0 +1,6 @@
+{
+  "command": "message_box",
+  "params": {
+    "message": "MCP Test Message - Tue Apr 22 11:03:02 2025 [ID:test_msg_1745334182]"
+  }
+}

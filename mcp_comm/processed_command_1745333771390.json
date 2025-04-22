@@ -1,0 +1,9 @@
+{
+  "command": "get_prompt",
+  "params": {
+    "name": "create_sketch_prompt",
+    "args": {
+      "description": "Test prompt"
+    }
+  }
+}

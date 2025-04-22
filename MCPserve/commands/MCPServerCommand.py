@@ -18,6 +18,8 @@ app = adsk.core.Application.get()
 ui = app.userInterface
 server_thread = None
 server_running = False
+pending_messages = []  # Store messages that need to be displayed
+message_command_handlers = []  # Store command handlers to prevent garbage collection
 
 # Initialize the global handlers list
 handlers = []
@@ -55,6 +57,75 @@ def run_mcp_server():
         import uvicorn
         import threading
         
+        # Create a timer to regularly check and process pending messages
+        def start_message_check_timer():
+            # Log that we're starting the timer
+            try:
+                workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+                workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+                os.makedirs(workspace_comm_dir, exist_ok=True)
+                timer_debug_path = os.path.join(workspace_comm_dir, "timer_debug.txt")
+                
+                with open(timer_debug_path, "a") as f:
+                    f.write(f"Starting message check timer at {time.ctime()}\n")
+            except:
+                pass
+            
+            # Function to check messages from a timer
+            def check_messages():
+                try:
+                    # Process any pending messages if we have any
+                    if pending_messages:
+                        with open(timer_debug_path, "a") as f:
+                            f.write(f"Timer check found {len(pending_messages)} pending messages at {time.ctime()}\n")
+                        
+                        process_pending_messages()
+                    
+                    # Keep the timer running if the server is running
+                    if server_running:
+                        # Create a new timer for the next check
+                        message_timer = threading.Timer(1.0, check_messages)
+                        message_timer.daemon = True
+                        message_timer.start()
+                except Exception as e:
+                    # Log any errors
+                    try:
+                        with open(timer_debug_path, "a") as f:
+                            f.write(f"Timer check error: {str(e)} at {time.ctime()}\n")
+                    except:
+                        pass
+            
+            # Start the timer
+            message_timer = threading.Timer(1.0, check_messages)
+            message_timer.daemon = True
+            message_timer.start()
+        
+        # Start the timer to check for messages
+        start_message_check_timer()
+        
+        # Also, directly test showing a message box when the server starts
+        def test_direct_message():
+            try:
+                test_message = "MCP Server startup test message"
+                debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/startup_test_message.txt"
+                
+                with open(debug_path, "a") as f:
+                    f.write(f"Trying command-based test message at server startup: {time.ctime()}\n")
+                
+                # Try to show the message box using command-based approach
+                create_message_box_command(test_message)
+                
+                with open(debug_path, "a") as f:
+                    f.write(f"Command-based test message triggered at {time.ctime()}\n")
+            except Exception as e:
+                with open(debug_path, "a") as f:
+                    f.write(f"Command-based test message failed: {str(e)} at {time.ctime()}\n")
+        
+        # Schedule the test message using threading.Timer
+        test_timer = threading.Timer(3.0, test_direct_message)
+        test_timer.daemon = True
+        test_timer.start()
+        
         # Create workspace path and diagnostic log
         workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
         workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
@@ -68,6 +139,14 @@ def run_mcp_server():
             f.write(f"Workspace directory: {workspace_path}\n")
             f.write(f"Communication directory: {workspace_comm_dir}\n\n")
             f.write(f"Python version: {sys.version}\n\n")
+            
+            # Get MCP version safely if available
+            try:
+                mcp_version = getattr(mcp, "__version__", "Unknown")
+                f.write(f"MCP Version: {mcp_version}\n\n")
+            except:
+                f.write("MCP Version: Unable to determine\n\n")
+            
             f.write(f"Registered Resources:\n  (Method available_resources() not available in this MCP SDK version)\n\n")
             f.write(f"Registered Tools:\n  (Method available_tools() not available in this MCP SDK version)\n\n")
             f.write(f"Registered Prompts:\n  (Method available_prompts() not available in this MCP SDK version)\n\n")
@@ -93,9 +172,16 @@ def run_mcp_server():
             try:
                 doc = app.activeDocument
                 if doc:
+                    path = "Unsaved"
+                    try:
+                        if hasattr(doc, 'dataFile') and doc.dataFile:
+                            path = doc.dataFile.name
+                    except:
+                        pass
+                        
                     return {
                         "name": doc.name,
-                        "path": doc.dataFile.name if doc.dataFile else "Unsaved",
+                        "path": path,
                         "type": str(doc.documentType)
                     }
                 else:
@@ -178,8 +264,19 @@ def run_mcp_server():
         def message_box(message: str) -> str:
             """Display a message box in Fusion 360."""
             try:
-                ui.messageBox(message)
-                return "Message displayed successfully"
+                # Log the attempt
+                debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_tool_debug.txt"
+                with open(debug_path, "a") as f:
+                    f.write(f"Message box tool called with: {message} at {time.ctime()}\n")
+                
+                # Try to show directly
+                success = show_message_box(message)
+                
+                # Log result
+                with open(debug_path, "a") as f:
+                    f.write(f"Direct show result: {success} at {time.ctime()}\n")
+                
+                return "Message displayed successfully (queued if not shown immediately)"
             except Exception as e:
                 return f"Error displaying message: {str(e)}"
         
@@ -191,12 +288,15 @@ def run_mcp_server():
                 if not doc:
                     return "No active document"
                 
-                if str(doc.documentType) != "FusionDesignDocumentType":
-                    return "Not a Fusion design document"
+                # Check for design product
+                design_product = doc.products.itemByProductType('DesignProductType')
+                if not design_product:
+                    return "Active document is not a design document"
                 
-                design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
+                # Cast to Design type
+                design = adsk.fusion.Design.cast(design_product)
                 if not design:
-                    return "No design in document"
+                    return "Failed to get design from document"
                 
                 root_comp = design.rootComponent
                 
@@ -204,11 +304,11 @@ def run_mcp_server():
                 sketch_plane = None
                 
                 # Check if the plane_name is a standard plane (XY, YZ, XZ)
-                if plane_name == "XY":
+                if plane_name.upper() == "XY":
                     sketch_plane = root_comp.xYConstructionPlane
-                elif plane_name == "YZ":
+                elif plane_name.upper() == "YZ":
                     sketch_plane = root_comp.yZConstructionPlane
-                elif plane_name == "XZ":
+                elif plane_name.upper() == "XZ":
                     sketch_plane = root_comp.xZConstructionPlane
                 else:
                     # Try to find a construction plane with the given name
@@ -229,7 +329,10 @@ def run_mcp_server():
                 
                 return f"Sketch created successfully: {sketch.name}"
             except Exception as e:
-                return f"Error creating sketch: {str(e)}"
+                error_msg = f"Error creating sketch: {str(e)}"
+                print(error_msg)
+                print(traceback.format_exc())
+                return error_msg
         
         @fusion_mcp.tool()
         def create_parameter(name: str, expression: str, unit: str, comment: str = "") -> str:
@@ -239,19 +342,37 @@ def run_mcp_server():
                 if not doc:
                     return "No active document"
                 
-                if str(doc.documentType) != "FusionDesignDocumentType":
-                    return "Not a Fusion design document"
+                # Check for design product
+                design_product = doc.products.itemByProductType('DesignProductType')
+                if not design_product:
+                    return "Active document is not a design document"
                 
-                design = adsk.fusion.Design.cast(doc.products.itemByProductType('DesignProductType'))
+                # Cast to Design type
+                design = adsk.fusion.Design.cast(design_product)
                 if not design:
-                    return "No design in document"
+                    return "Failed to get design from document"
                 
                 # Create the parameter
-                param = design.userParameters.add(name, adsk.core.ValueInput.createByString(expression), unit, comment)
-                
-                return f"Parameter created successfully: {param.name} = {param.expression}"
+                try:
+                    param = design.userParameters.add(name, adsk.core.ValueInput.createByString(expression), unit, comment)
+                    return f"Parameter created successfully: {param.name} = {param.expression}"
+                except Exception as e:
+                    # Check if parameter already exists
+                    existing_param = design.userParameters.itemByName(name)
+                    if existing_param:
+                        # Update the existing parameter
+                        existing_param.expression = expression
+                        existing_param.unit = unit
+                        if comment:
+                            existing_param.comment = comment
+                        return f"Parameter updated: {existing_param.name} = {existing_param.expression}"
+                    else:
+                        raise e
             except Exception as e:
-                return f"Error creating parameter: {str(e)}"
+                error_msg = f"Error creating parameter: {str(e)}"
+                print(error_msg)
+                print(traceback.format_exc())
+                return error_msg
         
         print("Registering prompts...")
         # Define prompts
@@ -436,18 +557,58 @@ Suggest appropriate parameters, their values, units, and purposes based on the u
                             message_file = os.path.join(comm_dir, "message_box.txt")
                             if os.path.exists(message_file):
                                 try:
+                                    # Create debug logs for every step
+                                    debug_file = os.path.join(workspace_comm_dir, "message_box_processing.txt")
+                                    with open(debug_file, "a") as f:
+                                        f.write(f"\n--- Found message_box.txt at {time.ctime()} ---\n")
+                                    
+                                    # Read the message
                                     with open(message_file, "r") as f:
                                         message = f.read().strip()
                                     
-                                    # Display the message
+                                    # Log the message content
+                                    with open(debug_file, "a") as f:
+                                        f.write(f"Message content: {message}\n")
+                                    
+                                    # Queue the message for display
                                     print(f"Displaying message box: {message}")
-                                    ui.messageBox(message)
+                                    pending_messages.append(message)
+                                    
+                                    # Log that we queued the message
+                                    with open(debug_file, "a") as f:
+                                        f.write(f"Added message to pending_messages queue\n")
+                                        f.write(f"Queue now contains {len(pending_messages)} messages\n")
+                                    
+                                    # Try to display the message directly as well
+                                    try:
+                                        # Use command-based approach for the most reliable display
+                                        create_message_box_command(message)
+                                        with open(debug_file, "a") as f:
+                                            f.write(f"Command-based display triggered\n")
+                                    except Exception as e:
+                                        with open(debug_file, "a") as f:
+                                            f.write(f"Command-based display attempt failed: {str(e)}\n")
                                     
                                     # Rename the file to avoid processing it again
                                     processed_file = os.path.join(comm_dir, f"processed_message_{int(time.time())}.txt")
+                                    with open(debug_file, "a") as f:
+                                        f.write(f"Renaming file to: {processed_file}\n")
+                                    
                                     os.rename(message_file, processed_file)
+                                    
+                                    with open(debug_file, "a") as f:
+                                        f.write(f"File renamed successfully\n")
+                                        
                                 except Exception as e:
                                     print(f"Error processing message file {message_file}: {str(e)}")
+                                    
+                                    # Log the error
+                                    try:
+                                        with open(debug_file, "a") as f:
+                                            f.write(f"ERROR processing message file: {str(e)}\n")
+                                            f.write(traceback.format_exc())
+                                    except:
+                                        pass
                             
                             # Check for command files
                             for file in os.listdir(comm_dir):
@@ -505,8 +666,22 @@ Suggest appropriate parameters, their values, units, and purposes based on the u
                                             elif command == "message_box":
                                                 # Display a message box
                                                 message = params.get("message", "")
-                                                ui.messageBox(message)
-                                                result = "Message displayed successfully"
+                                                
+                                                # Create debug log
+                                                debug_file = os.path.join(workspace_comm_dir, "command_message_debug.txt")
+                                                with open(debug_file, "a") as f:
+                                                    f.write(f"Processing message_box command with: {message} at {time.ctime()}\n")
+                                                
+                                                # Use command-based approach for message display
+                                                try:
+                                                    create_message_box_command(message)
+                                                    with open(debug_file, "a") as f:
+                                                        f.write(f"Command-based display triggered at {time.ctime()}\n")
+                                                except Exception as e:
+                                                    with open(debug_file, "a") as f:
+                                                        f.write(f"Command-based display attempt failed: {str(e)}\n")
+                                                
+                                                result = "Message processed successfully"
                                             elif command == "create_new_sketch":
                                                 # Create a new sketch
                                                 result = create_new_sketch(params.get("plane_name", "XY"))
@@ -518,6 +693,112 @@ Suggest appropriate parameters, their values, units, and purposes based on the u
                                                     params.get("unit", "mm"),
                                                     params.get("comment", "")
                                                 )
+                                            elif command == "read_resource":
+                                                # Read a resource
+                                                uri = params.get("uri", "")
+                                                if uri == "fusion://active-document-info":
+                                                    try:
+                                                        doc = app.activeDocument
+                                                        if doc:
+                                                            result = {
+                                                                "name": doc.name,
+                                                                "path": doc.dataFile.name if doc.dataFile else "Unsaved",
+                                                                "type": "FusionDesignDocumentType" if doc.products.itemByProductType('DesignProductType') else "Unknown"
+                                                            }
+                                                        else:
+                                                            result = {"error": "No active document"}
+                                                    except Exception as e:
+                                                        result = {"error": str(e)}
+                                                elif uri == "fusion://design-structure":
+                                                    try:
+                                                        doc = app.activeDocument
+                                                        if not doc:
+                                                            result = {"error": "No active document"}
+                                                        else:
+                                                            design = doc.products.itemByProductType('DesignProductType')
+                                                            if not design:
+                                                                result = {"error": "No design in document"}
+                                                            else:
+                                                                # Convert to adsk.fusion.Design type
+                                                                fusion_design = adsk.fusion.Design.cast(design)
+                                                                root_comp = fusion_design.rootComponent
+                                                                
+                                                                # Simplified response with just basic info
+                                                                result = {
+                                                                    "design_name": fusion_design.name,
+                                                                    "root_component": {
+                                                                        "name": root_comp.name,
+                                                                        "bodies_count": root_comp.bodies.count,
+                                                                        "sketches_count": root_comp.sketches.count,
+                                                                        "occurrences_count": root_comp.occurrences.count
+                                                                    }
+                                                                }
+                                                    except Exception as e:
+                                                        result = {"error": str(e)}
+                                                elif uri == "fusion://parameters":
+                                                    try:
+                                                        doc = app.activeDocument
+                                                        if not doc:
+                                                            result = {"error": "No active document"}
+                                                        else:
+                                                            design = doc.products.itemByProductType('DesignProductType')
+                                                            if not design:
+                                                                result = {"error": "No design in document"}
+                                                            else:
+                                                                # Convert to adsk.fusion.Design type
+                                                                fusion_design = adsk.fusion.Design.cast(design)
+                                                                
+                                                                params = []
+                                                                if fusion_design.allParameters:
+                                                                    for param in fusion_design.allParameters:
+                                                                        params.append({
+                                                                            "name": param.name,
+                                                                            "value": param.value,
+                                                                            "expression": param.expression,
+                                                                            "unit": param.unit,
+                                                                            "comment": param.comment
+                                                                        })
+                                                                
+                                                                result = {"parameters": params}
+                                                    except Exception as e:
+                                                        result = {"error": str(e)}
+                                                else:
+                                                    result = {"error": f"Unknown resource URI: {uri}"}
+                                            elif command == "get_prompt":
+                                                # Get a prompt
+                                                prompt_name = params.get("name", "")
+                                                prompt_args = params.get("args", {})
+                                                
+                                                if prompt_name == "create_sketch_prompt":
+                                                    description = prompt_args.get("description", "Default sketch")
+                                                    result = {
+                                                        "messages": [
+                                                            {
+                                                                "role": "system",
+                                                                "content": "You are an expert in Fusion 360 CAD modeling. Your task is to help the user create sketches based on their descriptions.\n\nBe very specific about what planes to use and what sketch entities to create."
+                                                            },
+                                                            {
+                                                                "role": "user",
+                                                                "content": f"I want to create a sketch with these requirements: {description}\n\nPlease provide step-by-step instructions for creating this sketch in Fusion 360."
+                                                            }
+                                                        ]
+                                                    }
+                                                elif prompt_name == "parameter_setup_prompt":
+                                                    description = prompt_args.get("description", "Default parameters")
+                                                    result = {
+                                                        "messages": [
+                                                            {
+                                                                "role": "system",
+                                                                "content": "You are an expert in Fusion 360 parametric design. Your task is to help the user set up parameters for their design.\n\nSuggest appropriate parameters, their values, units, and purposes based on the user's description."
+                                                            },
+                                                            {
+                                                                "role": "user",
+                                                                "content": f"I want to set up parameters for: {description}\n\nWhat parameters should I create, and what values, units, and comments should they have?"
+                                                            }
+                                                        ]
+                                                    }
+                                                else:
+                                                    result = {"error": f"Unknown prompt: {prompt_name}"}
                                             else:
                                                 result = f"Unknown command: {command}"
                                             
@@ -616,6 +897,9 @@ def start_server():
     # Reset server state
     server_running = True
     
+    # Start the message processing timer
+    start_message_processing_timer()
+    
     # Start server in a separate thread
     def server_thread_func():
         try:
@@ -684,6 +968,9 @@ class MCPServerCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 'Current server status: ' + ('Running' if server_running else 'Not Running'), 
                 4, True)
             
+            # Process any pending messages
+            process_pending_messages()
+            
             # Events
             onExecute = MCPServerCommandExecuteHandler()
             cmd.execute.add(onExecute)
@@ -704,6 +991,23 @@ class MCPServerCommandExecuteHandler(adsk.core.CommandEventHandler):
         try:
             # Start the server
             success = start_server()
+            
+            # Process any pending messages
+            process_pending_messages()
+            
+            # Try to show a test message directly for debugging
+            debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/execute_debug.txt"
+            with open(debug_path, "a") as f:
+                f.write(f"Execute handler called at {time.ctime()}\n")
+                f.write(f"Trying command-based test message\n")
+            
+            try:
+                create_message_box_command("MCP Server started - Test Message")
+                with open(debug_path, "a") as f:
+                    f.write(f"Command-based test message triggered at {time.ctime()}\n")
+            except Exception as e:
+                with open(debug_path, "a") as f:
+                    f.write(f"Command-based test message failed: {str(e)} at {time.ctime()}\n")
             
             if success:
                 workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
@@ -841,4 +1145,268 @@ def run(context):
         create_ui()
     except:
         if ui:
-            ui.messageBox('Failed to run:\n{}'.format(traceback.format_exc())) 
+            ui.messageBox('Failed to run:\n{}'.format(traceback.format_exc()))
+
+# Function to safely display a message box from any thread
+def safe_message_box(message, title="MCP Server Message"):
+    """Thread-safe way to display a message box in Fusion 360."""
+    with message_queue_lock:
+        message_queue.append((message, title))
+    
+    # Log the message in a file for debugging
+    try:
+        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+        workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+        os.makedirs(workspace_comm_dir, exist_ok=True)
+        
+        debug_file = os.path.join(workspace_comm_dir, "message_queue_debug.txt")
+        with open(debug_file, "a") as f:
+            f.write(f"Message added to queue at {time.ctime()}: {message}\n")
+    except:
+        pass
+
+# Function to process the message queue in the main UI thread
+def process_message_queue():
+    """Process any pending messages in the queue."""
+    if not message_queue:
+        return
+    
+    # Take one message from the queue
+    with message_queue_lock:
+        if message_queue:
+            message, title = message_queue.pop(0)
+        else:
+            return
+    
+    # Log that we're processing the message
+    try:
+        workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+        workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+        debug_file = os.path.join(workspace_comm_dir, "message_queue_debug.txt")
+        with open(debug_file, "a") as f:
+            f.write(f"Displaying message at {time.ctime()}: {message}\n")
+    except:
+        pass
+    
+    # Display the message in the UI thread
+    try:
+        ui.messageBox(message, title)
+    except Exception as e:
+        try:
+            with open(debug_file, "a") as f:
+                f.write(f"Error displaying message: {str(e)}\n")
+        except:
+            pass
+
+# Create a timer event to process messages
+class MessageProcessingTimerHandler(adsk.core.CustomEventHandler):
+    def __init__(self):
+        super().__init__()
+    
+    def notify(self, args):
+        try:
+            # Process any pending messages
+            process_message_queue()
+            
+            # Schedule the next execution
+            if server_running:
+                app = adsk.core.Application.get()
+                message_event_id = 'MCPMessageProcessingEvent'
+                app.scheduleCustomEvent(message_event_id, 0.5)  # Fire every 0.5 seconds
+        except:
+            pass
+
+# Function to start the message processing timer
+def start_message_processing_timer():
+    try:
+        app = adsk.core.Application.get()
+        message_event_id = 'MCPMessageProcessingEvent'
+        
+        # Register event if not already registered
+        try:
+            message_event = app.registerCustomEvent(message_event_id)
+            message_event_handler = MessageProcessingTimerHandler()
+            message_event.add(message_event_handler)
+            handlers.append(message_event_handler)
+        except:
+            # Event might already be registered
+            pass
+        
+        # Schedule the first execution
+        app.scheduleCustomEvent(message_event_id, 0.1)
+        
+        # Log that we started the timer
+        try:
+            workspace_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server"
+            workspace_comm_dir = os.path.join(workspace_path, "mcp_comm")
+            os.makedirs(workspace_comm_dir, exist_ok=True)
+            
+            debug_file = os.path.join(workspace_comm_dir, "message_queue_debug.txt")
+            with open(debug_file, "a") as f:
+                f.write(f"Message processing timer started at {time.ctime()}\n")
+        except:
+            pass
+    except Exception as e:
+        print(f"Error starting message processing timer: {str(e)}") 
+
+# Add a Command Handler for showing message boxes
+class MessageBoxCommandExecuteHandler(adsk.core.CommandEventHandler):
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+    
+    def notify(self, args):
+        try:
+            # Display the message
+            debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
+            with open(debug_file, "a") as f:
+                f.write(f"MessageBoxCommand executing for: {self.message} at {time.ctime()}\n")
+            
+            # Show the message box in the UI thread
+            ui.messageBox(self.message, "Fusion MCP Message")
+            
+            with open(debug_file, "a") as f:
+                f.write(f"Message box displayed successfully at {time.ctime()}\n")
+        except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"Error in command handler: {str(e)} at {time.ctime()}\n")
+                f.write(traceback.format_exc())
+
+class MessageBoxCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+    
+    def notify(self, args):
+        try:
+            debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
+            with open(debug_file, "a") as f:
+                f.write(f"MessageBoxCommand created for: {self.message} at {time.ctime()}\n")
+            
+            # Get the command
+            cmd = args.command
+            
+            # Connect to the execute event
+            onExecute = MessageBoxCommandExecuteHandler(self.message)
+            cmd.execute.add(onExecute)
+            message_command_handlers.append(onExecute)
+            
+            # Set command properties
+            cmd.isEnabled = True
+            cmd.isVisible = False
+            
+            with open(debug_file, "a") as f:
+                f.write(f"Command handlers set up at {time.ctime()}\n")
+        except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"Error in command created handler: {str(e)} at {time.ctime()}\n")
+                f.write(traceback.format_exc())
+
+# Function to create a message box command
+def create_message_box_command(message):
+    try:
+        debug_file = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_command_debug.txt"
+        with open(debug_file, "a") as f:
+            f.write(f"\nCreating message box command for: {message} at {time.ctime()}\n")
+        
+        # Create a unique command ID
+        command_id = f"MCPMessageBox_{int(time.time() * 1000)}"
+        
+        # Get or create the command definition
+        cmdDefs = ui.commandDefinitions
+        cmdDef = cmdDefs.itemById(command_id)
+        if cmdDef:
+            cmdDef.deleteMe()
+        
+        # Create a new command definition
+        cmdDef = cmdDefs.addButtonDefinition(
+            command_id, 
+            "MCP Message Box", 
+            f"Display message: {message}", 
+            ""  # No resource folder needed
+        )
+        
+        # Connect to the command created event
+        onCommandCreated = MessageBoxCommandCreatedHandler(message)
+        cmdDef.commandCreated.add(onCommandCreated)
+        message_command_handlers.append(onCommandCreated)
+        
+        with open(debug_file, "a") as f:
+            f.write(f"Command definition created with ID: {command_id} at {time.ctime()}\n")
+        
+        # Execute the command
+        cmdDef.execute()
+        
+        with open(debug_file, "a") as f:
+            f.write(f"Command execution triggered at {time.ctime()}\n")
+        
+        return True
+    except Exception as e:
+        try:
+            with open(debug_file, "a") as f:
+                f.write(f"Error creating message box command: {str(e)} at {time.ctime()}\n")
+                f.write(traceback.format_exc())
+        except:
+            pass
+        return False
+
+# Simple function to directly try showing a message box
+def show_message_box(message):
+    """Display a message box in Fusion 360."""
+    try:
+        # Log message for debugging
+        debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/message_debug.txt"
+        with open(debug_path, "a") as f:
+            f.write(f"Trying to show message: {message} at {time.ctime()}\n")
+        
+        # Use the command-based approach
+        success = create_message_box_command(message)
+        
+        # Log result
+        with open(debug_path, "a") as f:
+            f.write(f"Command creation result: {success} at {time.ctime()}\n")
+        
+        return success
+    except Exception as e:
+        # Log failure
+        with open(debug_path, "a") as f:
+            f.write(f"Error showing message box: {str(e)} at {time.ctime()}\n")
+        
+        # Add to pending messages to try again
+        pending_messages.append(message)
+        return False
+
+# Add a function to process pending messages in the main thread
+def process_pending_messages():
+    """Process any pending messages in the main thread."""
+    global pending_messages
+    
+    if not pending_messages:
+        return
+    
+    # Log that we're trying to process messages
+    debug_path = "C:/Users/Joseph/Documents/code/fusion-mcp-server/mcp_comm/pending_message_debug.txt"
+    with open(debug_path, "a") as f:
+        f.write(f"Processing {len(pending_messages)} pending messages at {time.ctime()}\n")
+    
+    # Try to process one message at a time to avoid blocking
+    if pending_messages:
+        message = pending_messages[0]  # Get the first message but don't remove yet
+        
+        # Log that we're trying again
+        with open(debug_path, "a") as f:
+            f.write(f"Processing pending message: {message} at {time.ctime()}\n")
+        
+        # Try to show the message
+        try:
+            ui.messageBox(message)
+            with open(debug_path, "a") as f:
+                f.write(f"Successfully displayed pending message at {time.ctime()}\n")
+            
+            # Remove the message since it was displayed
+            pending_messages.pop(0)
+        except Exception as e:
+            with open(debug_path, "a") as f:
+                f.write(f"Error displaying pending message: {str(e)} at {time.ctime()}\n")
+            
+            # Keep the message in the queue for now 

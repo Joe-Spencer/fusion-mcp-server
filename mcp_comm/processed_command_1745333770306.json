@@ -1,0 +1,6 @@
+{
+  "command": "create_new_sketch",
+  "params": {
+    "plane_name": "XY"
+  }
+}

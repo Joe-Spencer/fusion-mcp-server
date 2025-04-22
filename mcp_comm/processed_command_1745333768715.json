@@ -1,0 +1,6 @@
+{
+  "command": "read_resource",
+  "params": {
+    "uri": "fusion://design-structure"
+  }
+}

@@ -1,0 +1,5 @@
+Processing message_box command with: MCP Test Message - Tue Apr 22 13:46:49 2025 [ID:test_msg_1745344009] at Tue Apr 22 13:46:49 2025
+Processing message_box command with: MCP Test Message - Tue Apr 22 13:47:15 2025 [ID:test_msg_1745344035] at Tue Apr 22 13:47:16 2025
+Processing message_box command with: MCP Test Message - Tue Apr 22 13:47:30 2025 [ID:test_msg_1745344050] at Tue Apr 22 13:47:30 2025
+Processing message_box command with: MCP Test Message - Tue Apr 22 13:51:26 2025 [ID:test_msg_1745344286] at Tue Apr 22 13:51:26 2025
+Command-based display triggered at Tue Apr 22 13:51:26 2025

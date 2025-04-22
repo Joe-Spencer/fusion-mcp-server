@@ -1,0 +1,9 @@
+{
+  "command": "create_parameter",
+  "params": {
+    "name": "TestParam_3770",
+    "expression": "10",
+    "unit": "mm",
+    "comment": "Test parameter"
+  }
+}

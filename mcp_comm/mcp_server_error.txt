@@ -1,7 +1,9 @@
-MCP Server Error: module 'mcp' has no attribute '__version__'
+MCP Server Error: 'Application' object has no attribute 'scheduleSingleShot'
 
 Traceback (most recent call last):
-  File "C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\commands\MCPServerCommand.py", line 72, in run_mcp_server
-    "path": doc.dataFile.name if doc.dataFile else "Unsaved",
-                    ^^^^^^^^^^^^^^^
-AttributeError: module 'mcp' has no attribute '__version__'
+  File "C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\commands\MCPServerCommand.py", line 93, in run_mcp_server
+    start_message_check_timer()
+  File "C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\commands\MCPServerCommand.py", line 90, in start_message_check_timer
+    app.scheduleSingleShot(1000, check_messages)  # First check in 1 second
+    ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Application' object has no attribute 'scheduleSingleShot'

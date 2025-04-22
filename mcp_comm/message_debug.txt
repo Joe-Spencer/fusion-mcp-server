@@ -1,0 +1,6 @@
+Trying to show message: MCP Test Message - Tue Apr 22 13:46:49 2025 [ID:test_msg_1745344009] at Tue Apr 22 13:46:49 2025
+Message box displayed successfully via direct call at Tue Apr 22 13:46:49 2025
+Trying to show message: MCP Test Message - Tue Apr 22 13:47:15 2025 [ID:test_msg_1745344035] at Tue Apr 22 13:47:16 2025
+Message box displayed successfully via direct call at Tue Apr 22 13:47:16 2025
+Trying to show message: MCP Test Message - Tue Apr 22 13:47:30 2025 [ID:test_msg_1745344050] at Tue Apr 22 13:47:30 2025
+Message box displayed successfully via direct call at Tue Apr 22 13:47:30 2025

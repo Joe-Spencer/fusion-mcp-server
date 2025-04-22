@@ -1,0 +1,48 @@
+
+--- Found message_box.txt at Tue Apr 22 13:45:59 2025 ---
+Message content: DISPLAY_MESSAGE: Test message from MCP client at Fri Apr  4 07:57:55 2025
+Added message to pending_messages queue
+Queue now contains 1 messages
+Direct display attempt succeeded
+Renaming file to: C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\mcp_comm\processed_message_1745343959.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 13:46:49 2025 ---
+Message content: MCP Test Message - Tue Apr 22 13:46:49 2025 [ID:test_msg_1745344009]
+Added message to pending_messages queue
+Queue now contains 1 messages
+Direct display attempt succeeded
+Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745344009.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 13:47:16 2025 ---
+Message content: MCP Test Message - Tue Apr 22 13:47:15 2025 [ID:test_msg_1745344035]
+Added message to pending_messages queue
+Queue now contains 1 messages
+Direct display attempt succeeded
+Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745344036.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 13:47:30 2025 ---
+Message content: MCP Test Message - Tue Apr 22 13:47:30 2025 [ID:test_msg_1745344050]
+Added message to pending_messages queue
+Queue now contains 1 messages
+Direct display attempt succeeded
+Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745344050.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 13:50:33 2025 ---
+Message content: DISPLAY_MESSAGE: Test message from MCP client at Fri Apr  4 07:57:55 2025
+Added message to pending_messages queue
+Queue now contains 1 messages
+Direct display attempt succeeded
+Renaming file to: C:\Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve\mcp_comm\processed_message_1745344233.txt
+File renamed successfully
+
+--- Found message_box.txt at Tue Apr 22 13:51:26 2025 ---
+Message content: MCP Test Message - Tue Apr 22 13:51:26 2025 [ID:test_msg_1745344286]
+Added message to pending_messages queue
+Queue now contains 1 messages
+Command-based display triggered
+Renaming file to: C:\Users\Joseph\Documents\code\fusion-mcp-server\mcp_comm\processed_message_1745344286.txt
+File renamed successfully

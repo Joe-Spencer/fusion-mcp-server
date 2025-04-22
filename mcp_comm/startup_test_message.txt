@@ -1,0 +1,6 @@
+Trying direct test message at server startup: Tue Apr 22 13:46:04 2025
+Direct test message succeeded at Tue Apr 22 13:46:07 2025
+Trying direct test message at server startup: Tue Apr 22 13:47:07 2025
+Direct test message succeeded at Tue Apr 22 13:47:07 2025
+Trying command-based test message at server startup: Tue Apr 22 13:51:10 2025
+Command-based test message triggered at Tue Apr 22 13:51:10 2025
