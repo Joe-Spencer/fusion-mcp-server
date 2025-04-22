@@ -9,9 +9,6 @@ from . import MCPServerCommand
 # Add your imported modules to this list.
 # Fusion will automatically call the start() and stop() functions.
 commands = [
-    commandDialog,
-    paletteShow,
-    paletteSend,
     MCPServerCommand
 ]
 

@@ -1,6 +1,6 @@
 {
   "status": "running",
-  "started_at": "Fri Apr  4 11:12:23 2025",
+  "started_at": "Tue Apr 22 10:31:08 2025",
   "server_url": "http://127.0.0.1:3000/sse",
   "fusion_version": "2601.0.90",
   "available_resources": [

@@ -36,6 +36,13 @@ parser.add_argument("--url", default="http://127.0.0.1:3000/sse", help="Server S
 parser.add_argument("--timeout", type=int, default=10, help="Connection timeout in seconds (default: %(default)s)")
 parser.add_argument("--verbose", action="store_true", help="Print verbose output")
 parser.add_argument("--use-sdk", action="store_true", help="Use MCP SDK for communication (requires mcp package)")
+parser.add_argument("--test-connection", action="store_true", help="Test connection to the server")
+parser.add_argument("--test-message-box", action="store_true", help="Test message box functionality")
+parser.add_argument("--message", type=str, help="Custom message to display when testing message box")
+parser.add_argument("--list-resources", action="store_true", help="List available resources")
+parser.add_argument("--list-tools", action="store_true", help="List available tools")
+parser.add_argument("--list-prompts", action="store_true", help="List available prompts")
+parser.add_argument("--wait-ready", action="store_true", help="Wait for the server to be ready before running tests")
 args = parser.parse_args()
 
 # Set up paths for communication
@@ -356,30 +363,114 @@ class MCPClient:
         
         return None
     
-    async def display_message(self, message: str) -> bool:
-        """Display a message box in Fusion 360."""
+    async def test_message_box(self, message: str = None) -> Tuple[bool, str]:
+        """Test the message box functionality with verification."""
+        if message is None:
+            message = f"MCP Test Message - {time.ctime()}"
+        
+        print(f"Testing message box...")
         print(f"Displaying message: {message}")
         
-        # First try using the tool
-        result = await self.call_tool("message_box", message=message)
-        if result:
-            return True
+        # Create unique timestamp to track this specific message
+        timestamp = int(time.time())
+        message_id = f"test_msg_{timestamp}"
         
-        # If tool call failed, try the message file method
-        message_file = COMM_DIR / "message_box.txt"
-        with open(message_file, "w") as f:
-            f.write(message)
-        
-        print(f"Created message file: {message_file}")
-        
-        # Wait to see if file gets processed
-        start_time = time.time()
-        while time.time() - start_time < self.timeout:
-            if not message_file.exists() or list(COMM_DIR.glob("processed_message_*.txt")):
-                return True
-            await asyncio.sleep(0.1)
-        
-        return False
+        # Method 1: Try file-based communication first
+        try:
+            # Create command file with the message_id included in the message
+            command_id = int(time.time() * 1000)
+            command_file = COMM_DIR / f"command_{command_id}.json"
+            
+            # Include a unique identifier in the message to track it
+            tagged_message = f"{message} [ID:{message_id}]"
+            
+            # Create command data
+            command_data = {
+                "command": "message_box",
+                "params": {
+                    "message": tagged_message
+                }
+            }
+            
+            # Write command file
+            with open(command_file, "w") as f:
+                json.dump(command_data, f, indent=2)
+            
+            print(f"Created message_box command file: {command_file}")
+            
+            # Also create a direct message file as backup
+            message_file = COMM_DIR / "message_box.txt"
+            with open(message_file, "w") as f:
+                f.write(tagged_message)
+            
+            print(f"Created message file: {message_file}")
+            
+            # Wait for processed message file to appear
+            processed_prefix = "processed_message_"
+            response_file = COMM_DIR / f"response_{command_id}.json"
+            
+            start_time = time.time()
+            
+            # Look for either a processed message file or a response to our command
+            while time.time() - start_time < self.timeout:
+                # Check for processed message files
+                for file in os.listdir(COMM_DIR):
+                    if file.startswith(processed_prefix) and file.endswith(".txt"):
+                        processed_path = COMM_DIR / file
+                        
+                        # Check if this is our message by reading content
+                        try:
+                            with open(processed_path, "r") as f:
+                                content = f.read()
+                                if message_id in content:
+                                    print(f"✅ Found processed message file: {processed_path}")
+                                    print(f"Message was displayed in Fusion 360")
+                                    return True, "Message box displayed successfully"
+                        except Exception as e:
+                            print(f"Error reading processed file {processed_path}: {str(e)}")
+                
+                # Check for response to our command
+                if response_file.exists():
+                    try:
+                        with open(response_file, "r") as f:
+                            response = json.load(f)
+                            result = response.get("result", "")
+                            
+                            if "success" in result.lower():
+                                print(f"✅ Received success response from server")
+                                return True, "Message box display command acknowledged by server"
+                            else:
+                                print(f"❌ Received response but not success: {result}")
+                    except Exception as e:
+                        print(f"Error reading response file: {str(e)}")
+                
+                # Check if original message file is gone (possibly processed)
+                if not message_file.exists() and not os.path.exists(command_file):
+                    print(f"✅ Message file was processed (no longer exists)")
+                    return True, "Message file was processed by server"
+                
+                # Wait a bit before checking again
+                await asyncio.sleep(0.2)
+            
+            print(f"❌ Timeout waiting for message box confirmation")
+            
+            # If we get here, we didn't find confirmation
+            if response_file.exists():
+                try:
+                    with open(response_file, "r") as f:
+                        response = json.load(f)
+                        print(f"Server response: {response}")
+                        if "error" in response:
+                            return False, f"Server error: {response['error']}"
+                except:
+                    pass
+            
+            return False, "Timeout waiting for message box confirmation. The server may not be processing message commands."
+            
+        except Exception as e:
+            error_message = f"Error testing message box: {str(e)}"
+            print(f"❌ {error_message}")
+            return False, error_message
     
     async def close(self):
         """Close the connection to the server."""
@@ -466,7 +557,7 @@ async def run_tests(client: MCPClient, server_status=None):
     
     # Test message box in either case
     print("\nTesting message box...")
-    message_result = await client.display_message(f"MCP Test Message - {time.ctime()}")
+    message_result = await client.test_message_box()
     if message_result:
         print("✅ Message box displayed successfully")
     else:
@@ -475,92 +566,153 @@ async def run_tests(client: MCPClient, server_status=None):
     return True
 
 async def main():
-    """Main entry point."""
-    # First check for server status file which has the most detailed information
-    status_file = COMM_DIR / "server_status.json"
-    server_status = None
+    """Main function."""
+    print("\n=== FUSION 360 MCP SERVER TESTS ===\n")
     
+    # Check for server status file
+    status_file = COMM_DIR / "server_status.json"
     if status_file.exists():
         try:
             with open(status_file, "r") as f:
-                server_status = json.load(f)
-            
-            print(f"Found server status file:")
-            print(f"  Status: {server_status.get('status', 'unknown')}")
-            print(f"  Last updated: {server_status.get('formatted_time', 'unknown')}")
-            print(f"  Server URL: {server_status.get('server_url', 'unknown')}")
-            
-            # If the server reports it's running, use its URL
-            if server_status.get('status') == 'running' and server_status.get('server_url'):
-                # Override the URL from command line if server has a different one
-                if args.url != server_status.get('server_url'):
-                    print(f"Updating URL from {args.url} to {server_status.get('server_url')}")
-                    args.url = server_status.get('server_url')
+                status = json.load(f)
+                print("Found server status file:")
+                print(f"  Status: {status.get('status', 'unknown')}")
+                print(f"  Last updated: {status.get('started_at', 'unknown')}")
+                print(f"  Server URL: {status.get('server_url', 'unknown')}")
+                print()
         except Exception as e:
             print(f"Error reading server status file: {str(e)}")
-    else:
-        print("No server status file found. Checking ready files...")
-        # Fall back to checking ready files
-        ready_paths = [
-            WORKSPACE_PATH / "mcp_server_ready.txt",
-            WORKSPACE_PATH / "mcp_comm" / "mcp_server_ready.txt",
-            Path(os.path.expanduser("~/Desktop/mcp_server_ready.txt")),
-            Path("C:/Users/Joseph/AppData/Roaming/Autodesk/Autodesk Fusion 360/API/AddIns/MCPserve/mcp_comm/mcp_server_ready.txt")
-        ]
-        
-        ready_files = []
-        for path in ready_paths:
-            if path.exists():
-                try:
-                    content = path.read_text().strip()
-                    ready_files.append((path, content))
-                except Exception as e:
-                    ready_files.append((path, f"Error reading: {str(e)}"))
-        
-        if ready_files:
-            print(f"Found {len(ready_files)} ready file(s):")
-            for path, content in ready_files:
-                print(f"  - {path}: {content}")
-        else:
-            print("No server ready files found. The MCP Server may not be running.")
-            print("Please start the MCP Server command in Fusion 360 first.")
     
-    # Check for any error logs
+    # Check for error files
     error_file = COMM_DIR / "mcp_server_error.txt"
     if error_file.exists():
         try:
-            error_content = error_file.read_text().strip()
-            print("\n⚠️ Server error detected:")
-            print(f"{error_content[:500]}..." if len(error_content) > 500 else error_content)
-            print("\nThe server might not be functioning correctly.")
+            with open(error_file, "r") as f:
+                error_content = f.read().strip()
+                print("⚠️ Server error detected:")
+                print(error_content)
+                print("\nThe server might not be functioning correctly.")
+                print()
         except Exception as e:
             print(f"Error reading error file: {str(e)}")
     
-    # Create client and run tests
-    client = MCPClient(
-        sse_url=args.url,
-        timeout=args.timeout,
-        use_sdk=args.use_sdk
-    )
+    # Create client
+    client = MCPClient(sse_url=args.url, timeout=args.timeout, use_sdk=args.use_sdk)
     
-    try:
-        success = await run_tests(client, server_status)
-        if success:
-            print("\n✅ All tests completed.")
+    # Wait for ready file if requested
+    if args.wait_ready:
+        print("Waiting for server ready file...")
+        ready_files = [
+            WORKSPACE_PATH / "mcp_server_ready.txt",
+            COMM_DIR / "mcp_server_ready.txt",
+            Path.home() / "Desktop" / "mcp_server_ready.txt"
+        ]
+        
+        start_time = time.time()
+        while time.time() - start_time < args.timeout:
+            for ready_file in ready_files:
+                if ready_file.exists():
+                    try:
+                        with open(ready_file, "r") as f:
+                            content = f.read().strip()
+                        print(f"✅ Server ready: {content}")
+                        break
+                    except:
+                        pass
+            else:
+                # Continue waiting if no file found
+                await asyncio.sleep(0.5)
+                continue
+            
+            # If we're here, we found a ready file
+            break
         else:
-            print("\n❌ Some tests failed.")
-    finally:
-        await client.close()
+            print("❌ Timeout waiting for server ready file")
+    
+    # Run selected tests
+    any_test_selected = False
+    
+    # Test connection if requested or if no specific test is selected
+    if args.test_connection or not any([
+        args.test_message_box, args.list_resources, 
+        args.list_tools, args.list_prompts
+    ]):
+        any_test_selected = True
+        print("\nTesting connection to MCP server...")
+        success, message = await client.test_connection()
+        if success:
+            print(f"✅ Connection successful: {message}")
+        else:
+            print(f"❌ Connection failed: {message}")
+    
+    # Check server status
+    if status_file.exists():
+        try:
+            with open(status_file, "r") as f:
+                status = json.load(f)
+                print("\nUsing server status information from server_status.json file:\n")
+                
+                # List resources if requested
+                if args.list_resources or not any_test_selected:
+                    any_test_selected = True
+                    resources = status.get("available_resources", [])
+                    if resources:
+                        print(f"Available resources:")
+                        for resource in resources:
+                            print(f"  - {resource}")
+                        print()
+                    else:
+                        print("❌ No resources found in server status\n")
+                
+                # List tools if requested
+                if args.list_tools or not any_test_selected:
+                    any_test_selected = True
+                    tools = status.get("available_tools", [])
+                    if tools:
+                        print(f"Available tools:")
+                        for tool in tools:
+                            print(f"  - {tool}")
+                        print()
+                    else:
+                        print("❌ No tools found in server status\n")
+                
+                # List prompts if requested
+                if args.list_prompts or not any_test_selected:
+                    any_test_selected = True
+                    prompts = status.get("available_prompts", [])
+                    if prompts:
+                        print(f"Available prompts:")
+                        for prompt in prompts:
+                            print(f"  - {prompt}")
+                        print()
+                    else:
+                        print("❌ No prompts found in server status\n")
+        except Exception as e:
+            print(f"Error reading status file: {str(e)}")
+    
+    # Test message box if requested or if no specific test is selected
+    if args.test_message_box or not any_test_selected:
+        any_test_selected = True
+        print("\n=== MESSAGE BOX TEST ===")
+        print("⚠️ NOTE: Even if this test reports success, please verify that you actually see")
+        print("a message box pop up in Fusion 360. This test can give false positives if the")
+        print("server processes the command file but fails to display the actual message box.\n")
+        
+        message = args.message if args.message else None
+        success, result = await client.test_message_box(message)
+        if success:
+            print(f"✅ Message box test appears successful: {result}")
+            print("\n⚠️ IMPORTANT: Did you actually see a message box in Fusion 360?")
+            print("If not, the server may not be functioning correctly despite this 'success' report.")
+        else:
+            print(f"❌ Message box test failed: {result}")
+            print("\nCheck that Fusion 360 is running and the MCP Server add-in is active.")
+            print("You can manually restart the MCP Server from the Add-Ins panel in Fusion 360.")
+    
+    # Close the client
+    await client.close()
+    
+    print("\n✅ All tests completed.")
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nOperation canceled by user")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\nError: {str(e)}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1) 
+    asyncio.run(main()) 
